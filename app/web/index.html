@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Таск-трекер: задачи, списки и совместная работа">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Задачи">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>Задачи</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    html, body { height: 100%; margin: 0; background: #E9E4D2; }
+    @media (prefers-color-scheme: dark) { html, body { background: #1A1816; } }
+    #boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            font: 15px system-ui, sans-serif; color: #8a8576; }
+  </style>
+</head>
+<body>
+  <div id="boot">Загрузка…</div>
+  <script>
+    // Service Worker: приложение открывается без связи с сервером (только по https)
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+    }
+    window.addEventListener('flutter-first-frame', function () {
+      var b = document.getElementById('boot'); if (b) b.remove();
+    });
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

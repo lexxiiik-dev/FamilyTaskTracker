@@ -1,0 +1,28 @@
+# Копия flutter_local_notifications_windows 4.0.0 БЕЗ нативной части.
+# Нативный код плагина требует компонент ATL из Visual Studio, а приложение на Windows
+# показывает уведомления через nativeapi (см. lib/platform/platform_io.dart), поэтому
+# здесь оставлен только Dart-код, нужный пакету flutter_local_notifications для компиляции.
+name: flutter_local_notifications_windows
+description: Windows implementation of the flutter_local_notifications plugin (Dart part only)
+version: 4.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+  flutter: ">=3.44.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.2
+  flutter_local_notifications_platform_interface: ^13.0.0
+  meta: ^1.11.0
+  timezone: ^0.11.0
+  xml: ">=6.5.0 <8.0.0"
+# Плагин остаётся плагином (на него ссылается flutter_local_notifications), но без нативного кода.
+flutter:
+  plugin:
+    implements: flutter_local_notifications
+    platforms:
+      windows:
+        dartPluginClass: FlutterLocalNotificationsWindows

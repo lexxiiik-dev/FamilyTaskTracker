@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:minHeight="34dp"
+    android:orientation="horizontal">
+
+    <FrameLayout
+        android:id="@+id/item_indent"
+        android:layout_width="16dp"
+        android:layout_height="1dp"
+        android:visibility="gone" />
+
+    <!-- область нажатия шире самого кружка; при нажатии расходится круг -->
+    <ImageView
+        android:id="@+id/item_check"
+        android:layout_width="38dp"
+        android:layout_height="34dp"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Выполнено"
+        android:paddingStart="11dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="9dp"
+        android:paddingBottom="8dp"
+        android:src="@drawable/widget_check" />
+
+    <LinearLayout
+        android:id="@+id/item_body"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:minHeight="34dp"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingTop="3dp"
+        android:paddingEnd="6dp"
+        android:paddingBottom="3dp">
+
+        <TextView
+            android:id="@+id/item_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textColor="@color/widget_text"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/item_due"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:textColor="@color/widget_muted"
+            android:textSize="11sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/item_star"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingEnd="10dp"
+        android:text="★"
+        android:textColor="@color/widget_accent"
+        android:textSize="13sp"
+        android:visibility="gone" />
+</LinearLayout>

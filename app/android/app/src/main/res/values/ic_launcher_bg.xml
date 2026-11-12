@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- подложка адаптивного значка: лаунчер всё равно обрезает её своей формой (на Pixel — кругом), прозрачная становится чёрной -->
+    <color name="ic_launcher_bg">#F3F8F3</color>
+</resources>

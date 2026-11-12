@@ -1,0 +1,17 @@
+# docker compose up -d   — затем данные для подключения:  docker compose logs todod
+services:
+  todod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      # адрес, по которому сервер видят пользователи (показывается администратору)
+      PUBLIC_URL: "https://1.2.3.4:8443"
+    volumes:
+      - todod-data:/data
+
+volumes:
+  todod-data:

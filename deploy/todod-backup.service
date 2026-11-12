@@ -1,0 +1,8 @@
+[Unit]
+Description=Todo server: daily database backup
+
+[Service]
+Type=oneshot
+User=todod
+Group=todod
+ExecStart=/opt/todod/backup.sh

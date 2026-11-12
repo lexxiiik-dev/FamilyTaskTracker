@@ -1,0 +1,5 @@
+# Пример для Caddy (https://caddyserver.com): настоящий сертификат Let's Encrypt для вашего домена.
+# todod установлен с PROXY=1 и слушает 127.0.0.1:8080.
+tasks.example.com {
+	reverse_proxy 127.0.0.1:8080
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Todo server (todod)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=todod
+Group=todod
+ExecStart=/opt/todod/todod -config /etc/todod/config.json
+Restart=always
+RestartSec=3
+# процесс занимает несколько десятков МБ; веб-клиент встроен в программу
+MemoryMax=256M
+Environment=GOMEMLIMIT=128MiB
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/todod
+
+[Install]
+WantedBy=multi-user.target

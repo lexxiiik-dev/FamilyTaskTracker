@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Передний слой адаптивного значка (108×108, видимая зона — центральные 66): галочка с переливом, тенью и бликом.
+     Повторяет растровые значки из tool/gen_icons.dart. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- тень -->
+    <path android:pathData="M36,57.3 L48.6,69.3 L72.6,43.5" android:strokeWidth="9.5"
+        android:strokeColor="#380E2A17" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <!-- галочка -->
+    <path android:pathData="M36,55.8 L48.6,67.8 L72.6,42" android:strokeWidth="9.3"
+        android:strokeLineCap="round" android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:type="linear" android:startX="36" android:startY="55.8" android:endX="72.6" android:endY="42"
+                android:startColor="#2E6B41" android:endColor="#7CCF8E" />
+        </aapt:attr>
+    </path>
+    <!-- блик -->
+    <path android:pathData="M55.6,58 L67.4,45.3" android:strokeWidth="2"
+        android:strokeColor="#3DFFFFFF" android:strokeLineCap="round" />
+</vector>

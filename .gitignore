@@ -1,0 +1,15 @@
+# сборки
+/dist/
+/app/build/
+/app/test/bin/
+/app/test/failures/
+# веб-клиент кладётся в server/web только на время сборки сервера
+/server/web/*
+!/server/web/index.html
+# ключ подписи Android: хранить у себя, не публиковать
+/app/android/key.properties
+/app/android/*.jks
+# данные локального запуска сервера
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
