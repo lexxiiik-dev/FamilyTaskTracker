@@ -1,4 +1,6 @@
 // Левое меню: пользователь, режим, поиск, разделы, списки.
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../core/model.dart';
@@ -120,12 +122,12 @@ class _SidebarState extends State<Sidebar> {
               // 4. разделы
               _item(context, secToday, Icons.wb_sunny_outlined, 'Сегодняшний день'),
               _item(context, secImportant, Icons.star_border, 'Важные'),
-              _item(context, secPlanned, Icons.calendar_month_outlined, 'Запланировано'),
+              _item(context, secSchedule, Icons.date_range_outlined, 'Планирование'),
               _item(context, secTasks, Icons.home_outlined, 'Задачи'),
               if (!repo.isLocal) _item(context, secPrivate, Icons.lock_outline, 'Мои дела'),
               const Padding(padding: EdgeInsets.symmetric(vertical: 6, horizontal: 8), child: Divider()),
               // 5. пользовательские списки
-              // порядок меняется перетаскиванием: зажать список и потянуть
+              // порядок меняется перетаскиванием за ручку; долгое нажатие и правая кнопка открывают меню списка
               ReorderableListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
@@ -133,7 +135,7 @@ class _SidebarState extends State<Sidebar> {
                 itemCount: lists.length,
                 onReorder: (from, to) => repo.moveList(from, to > from ? to - 1 : to),
                 proxyDecorator: (child, _, _) => Material(color: cs.surface, elevation: 4, borderRadius: BorderRadius.circular(10), child: child),
-                itemBuilder: (context, i) => ReorderableDelayedDragStartListener(key: ValueKey(lists[i].id), index: i, child: _listItem(context, lists[i])),
+                itemBuilder: (context, i) => KeyedSubtree(key: ValueKey(lists[i].id), child: _listItem(context, lists[i], i)),
               ),
               ListTile(
                 leading: Icon(Icons.add, color: cs.primary),
@@ -160,14 +162,16 @@ class _SidebarState extends State<Sidebar> {
     }
   }
 
-  Widget _item(BuildContext context, String id, IconData icon, String title, {Widget? trailing, VoidCallback? onLong}) {
+  Widget _item(BuildContext context, String id, IconData icon, String title, {Widget? trailing, Color? iconColor, Widget? handle}) {
     final cs = Theme.of(context).colorScheme;
     final selected = app.section == id && app.query.isEmpty;
     final count = app.repo.openCount(id);
+    final ic = Icon(icon, size: 20, color: iconColor ?? (selected ? cs.primary : mutedOf(context)));
     return ListTile(
       selected: selected,
       selectedTileColor: cs.primary.withValues(alpha: 0.13),
-      leading: Icon(icon, size: 20, color: selected ? cs.primary : mutedOf(context)),
+      contentPadding: handle == null ? null : const EdgeInsets.only(left: 2, right: 16),
+      leading: handle == null ? ic : Row(mainAxisSize: MainAxisSize.min, children: [handle, const SizedBox(width: 2), ic]),
       title: Text(
         title,
         overflow: TextOverflow.ellipsis,
@@ -185,64 +189,98 @@ class _SidebarState extends State<Sidebar> {
         ],
       ),
       onTap: () => _go(id),
-      onLongPress: onLong,
     );
   }
 
-  Widget _listItem(BuildContext context, Ent l) {
+  Widget _listItem(BuildContext context, Ent l, int index) {
     final repo = app.repo;
     final a = repo.user(l.s('assignee_id'));
-    final menu = repo.canEdit(l) ? () => _listMenu(context, l) : null;
+    final menu = repo.canEdit(l);
+    // правая кнопка и долгое нажатие открывают меню списка там, где нажали
     return GestureDetector(
-      onSecondaryTap: menu,
+      onSecondaryTapDown: menu ? (d) => showListMenu(context, l, at: d.globalPosition) : null,
+      onLongPressStart: menu ? (d) => showListMenu(context, l, at: d.globalPosition) : null,
       child: _item(
         context,
         l.id,
         Icons.list_alt_outlined,
         l.name.isEmpty ? 'Без названия' : l.name,
+        iconColor: l.color.isEmpty ? null : parseHex(l.color, Theme.of(context).colorScheme.primary),
+        // ручка перетаскивания — слева, перед значком списка (мышью и пальцем тянется сразу)
+        handle: ReorderableDragStartListener(
+          index: index,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.grab,
+            child: Padding(
+              key: ValueKey('list-handle:${l.id}'),
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+              child: Icon(Icons.drag_indicator, size: 18, color: mutedOf(context).withValues(alpha: 0.5)),
+            ),
+          ),
+        ),
         trailing: a == null ? null : Tooltip(message: 'Исполнитель: ${a.name}', child: UserAvatar(a, size: 20)),
       ),
     );
   }
 
   Future<void> _createList(BuildContext context) async {
-    final r = await showDialog<(String, String)>(context: context, builder: (_) => const ListDialog());
-    if (r == null || r.$1.trim().isEmpty) return;
-    final l = await app.repo.createList(r.$1.trim(), r.$2);
+    final r = await showDialog<ListForm>(context: context, builder: (_) => const ListDialog());
+    if (r == null || r.name.trim().isEmpty) return;
+    final l = await app.repo.createList(r.name.trim(), r.assignee, color: r.color);
     _go(l.id);
   }
-
-  Future<void> _listMenu(BuildContext context, Ent l) => showListMenu(context, l);
 }
 
-/// Действия со списком: переименовать, сменить исполнителя, удалить (доступны создателю списка).
-Future<void> showListMenu(BuildContext context, Ent l) async {
+/// Действия со списком: изменить, сделать основным, удалить (доступны создателю списка).
+/// На ПК и в браузере — контекстное меню в точке [at]; на телефоне — панель снизу.
+/// Порядок списков меняется только перетаскиванием.
+Future<void> showListMenu(BuildContext context, Ent l, {Offset? at}) async {
   final repo = app.repo;
-  final action = await showModalBottomSheet<String>(
-    context: context,
-    showDragHandle: true,
-    builder: (c) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('Изменить название и исполнителя'), onTap: () => Navigator.pop(c, 'edit')),
-          ListTile(leading: const Icon(Icons.home_outlined), title: const Text('Сделать основным списком'), onTap: () => Navigator.pop(c, 'home')),
-          ListTile(leading: const Icon(Icons.delete_outline), title: const Text('Удалить список'), onTap: () => Navigator.pop(c, 'delete')),
-        ],
+  const items = [
+    (Icons.edit_outlined, 'Изменить список', 'edit'),
+    (Icons.home_outlined, 'Сделать основным списком', 'home'),
+    (Icons.delete_outline, 'Удалить список', 'delete'),
+  ];
+  final touch = Theme.of(context).platform == TargetPlatform.android || Theme.of(context).platform == TargetPlatform.iOS;
+  String? action;
+  if (at != null && !touch) {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final p = overlay.globalToLocal(at);
+    action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(p.dx, p.dy, overlay.size.width - p.dx, overlay.size.height - p.dy),
+      items: [
+        for (final (icon, label, key) in items)
+          PopupMenuItem(
+            value: key,
+            height: 40,
+            child: Row(children: [Icon(icon, size: 18), const SizedBox(width: 12), Text(label)]),
+          ),
+      ],
+    );
+  } else {
+    action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (c) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (icon, label, key) in items) ListTile(leading: Icon(icon), title: Text(label), onTap: () => Navigator.pop(c, key)),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
   if (!context.mounted) return;
   if (action == 'home') {
     await repo.setSetting('home_list', l.id);
   } else if (action == 'edit') {
-    final r = await showDialog<(String, String)>(
-      context: context,
-      builder: (_) => ListDialog(list: l),
-    );
+    final r = await showDialog<ListForm>(context: context, builder: (_) => ListDialog(list: l));
     if (r == null) return;
-    if (r.$1.trim().isNotEmpty && r.$1.trim() != l.name) await repo.renameList(l, r.$1.trim());
-    if (r.$2 != l.s('assignee_id')) await repo.setListAssignee(l, r.$2);
+    if (r.name.trim().isNotEmpty && r.name.trim() != l.name) await repo.renameList(l, r.name.trim());
+    if (r.assignee != l.s('assignee_id')) await repo.setListAssignee(l, r.assignee);
+    if (r.color != l.color) await repo.setListColor(l, r.color);
   } else if (action == 'delete') {
     final n = repo.tasks.values.where((t) => t.listId == l.id && !t.deleted).length;
     String? choice = 'move';
@@ -268,7 +306,15 @@ Future<void> showListMenu(BuildContext context, Ent l) async {
   }
 }
 
-/// Создание и правка списка: название и необязательный исполнитель.
+/// Палитра цветов списков (карточки задач в «Планировании»).
+const listPalette = ['#3F6B4A', '#2F6FB5', '#843875', '#B5542F', '#B58A2F', '#2F9E9A', '#6B5BD6', '#C0392B', '#5C6B73', '#D9668B', '#4E9A2F', '#8A6A4B'];
+
+/// Что выбрано в окне списка.
+class ListForm {
+  final String name, assignee, color;
+  const ListForm(this.name, this.assignee, this.color);
+}
+/// Создание и правка списка: название, цвет и необязательный исполнитель.
 class ListDialog extends StatefulWidget {
   final Ent? list;
   const ListDialog({super.key, this.list});
@@ -279,6 +325,10 @@ class ListDialog extends StatefulWidget {
 class _ListDialogState extends State<ListDialog> {
   late final _name = TextEditingController(text: widget.list?.name ?? '');
   late String _assignee = widget.list?.s('assignee_id') ?? '';
+  // новый список получает случайный цвет из палитры
+  late String _color = widget.list?.color ?? listPalette[Random(app.repo.clock()).nextInt(listPalette.length)];
+
+  ListForm get _form => ListForm(_name.text, _assignee, _color);
 
   @override
   void dispose() {
@@ -299,7 +349,32 @@ class _ListDialogState extends State<ListDialog> {
               controller: _name,
               autofocus: true,
               decoration: const InputDecoration(hintText: 'Название'),
-              onSubmitted: (_) => Navigator.pop(context, (_name.text, _assignee)),
+              onSubmitted: (_) => Navigator.pop(context, _form),
+            ),
+            const SizedBox(height: 14),
+            Align(alignment: Alignment.centerLeft, child: Text('Цвет', style: TextStyle(fontSize: 13, color: mutedOf(context)))),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final c in listPalette)
+                  InkWell(
+                    key: ValueKey('list-color:$c'),
+                    customBorder: const CircleBorder(),
+                    onTap: () => setState(() => _color = c),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: parseHex(c, Theme.of(context).colorScheme.primary),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: _color == c ? Theme.of(context).colorScheme.onSurface : Colors.transparent, width: 2),
+                      ),
+                      child: _color == c ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
+                    ),
+                  ),
+              ],
             ),
             // исполнитель списка — только при совместной работе на сервере
             if (!app.repo.isLocal) ...[
@@ -332,7 +407,7 @@ class _ListDialogState extends State<ListDialog> {
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
-        FilledButton(onPressed: () => Navigator.pop(context, (_name.text, _assignee)), child: Text(widget.list == null ? 'Создать' : 'Сохранить')),
+        FilledButton(onPressed: () => Navigator.pop(context, _form), child: Text(widget.list == null ? 'Создать' : 'Сохранить')),
       ],
     );
   }

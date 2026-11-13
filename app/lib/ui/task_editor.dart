@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../core/model.dart';
 import 'common.dart';
+import 'schedule.dart';
 import 'task_list.dart';
 
 class TaskEditor extends StatefulWidget {
@@ -172,56 +173,21 @@ class _TaskEditorState extends State<TaskEditor> {
         onTap: (edit && parent == null) ? () => _pickList(context) : null,
       ),
 
+      // «Сегодня» — это пункт планирования без времени на сегодня; если на сегодня пункты уже есть, кнопки нет
+      if (toggle && !repo.plannedToday(t) && !t.done)
+        _Row(key: const ValueKey('add-today'), icon: Icons.wb_sunny_outlined, title: 'Добавить в «Сегодня»', onTap: () => repo.addToday(t)),
+
+      // пункты планирования (дни, время, уведомления): ставят автор и исполнитель
+      PlanItemsEditor(task: t, enabled: toggle),
+
       _Row(
-        icon: Icons.wb_sunny_outlined,
-        title: t.inToday ? 'Добавлено в «Сегодня»' : 'Добавить в «Сегодня»',
-        active: t.inToday,
-        onTap: toggle ? () => _set('in_today', !t.inToday) : null,
-        trailing: t.inToday && toggle ? IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => _set('in_today', false)) : null,
+        icon: Icons.repeat,
+        title: t.recurrence == null ? 'Повторять' : describeRecurrence(t.recurrence),
+        subtitle: parent != null ? 'Только для основных задач' : (t.recurrence != null ? 'Пункты планирования переносятся на следующий раз' : null),
+        active: t.recurrence != null,
+        onTap: (edit && parent == null) ? () => _pickRecurrence(context) : null,
+        trailing: t.recurrence != null && edit ? IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => _set('recurrence', null)) : null,
       ),
-
-      // дедлайн, напоминание, повторение
-      Plate(
-        padding: EdgeInsets.zero,
-        child: Column(
-          children: [
-            _Row(
-              flat: true,
-              icon: Icons.event_outlined,
-              title: t.deadline.isEmpty ? 'Добавить срок' : 'Срок: ${humanDate(t.deadline, repo.today)}',
-              active: t.deadline.isNotEmpty,
-              danger: repo.overdue(t),
-              onTap: edit
-                  ? () async {
-                      final d = await pickDate(context, t.deadline, repo.today);
-                      if (d != null) _set('deadline', d);
-                    }
-                  : null,
-              trailing: t.deadline.isNotEmpty && edit ? IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => _set('deadline', '')) : null,
-            ),
-            const Divider(indent: 44),
-            _Row(
-              flat: true,
-              icon: Icons.notifications_none,
-              title: t.reminderAt == 0 ? 'Напомнить' : 'Напомнить: ${reminderLabel(repo, t.reminderAt)}',
-              active: t.reminderAt > 0,
-              onTap: edit ? () => _pickReminder(context) : null,
-              trailing: t.reminderAt > 0 && edit ? IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => _set('reminder_at', 0)) : null,
-            ),
-            const Divider(indent: 44),
-            _Row(
-              flat: true,
-              icon: Icons.repeat,
-              title: t.recurrence == null ? 'Повторять' : describeRecurrence(t.recurrence),
-              subtitle: t.deadline.isEmpty ? 'Для повторения нужен срок' : (parent != null ? 'Только для основных задач' : null),
-              active: t.recurrence != null,
-              onTap: (edit && t.deadline.isNotEmpty && parent == null) ? () => _pickRecurrence(context) : null,
-              trailing: t.recurrence != null && edit ? IconButton(icon: const Icon(Icons.close, size: 18), onPressed: () => _set('recurrence', null)) : null,
-            ),
-          ],
-        ),
-      ),
-
       // подзадачи: быстрое добавление с переходом в полную форму
       if (!draft && parent == null) ...[
         Padding(
@@ -332,10 +298,6 @@ class _TaskEditorState extends State<TaskEditor> {
                       }
                       await repo.setTaskField(t, 'title', title);
                       await repo.setTaskField(t, 'description', _desc.text);
-                      if (app.section == 'planned' && t.deadline.isEmpty && context.mounted) {
-                        toast(context, 'В «Запланировано» у задачи должен быть срок');
-                        return;
-                      }
                       final saved = await repo.addTask(t);
                       app.openTask(saved.id);
                     },
@@ -405,20 +367,10 @@ class _TaskEditorState extends State<TaskEditor> {
     if (id != null) _set('list_id', id);
   }
 
-  Future<void> _pickReminder(BuildContext context) async {
-    final repo = app.repo;
-    final cur = t.reminderAt > 0 ? repo.localOf(t.reminderAt) : null;
-    final date = await pickDate(context, cur == null ? (t.deadline.isEmpty ? repo.today : t.deadline) : fmtDate(cur), repo.today);
-    if (date == null || !context.mounted) return;
-    final time = await pickTime(context, cur == null ? repo.deadlineTime : fmtTime(cur.hour, cur.minute));
-    if (time == null) return;
-    _set('reminder_at', repo.momentOf(date, time));
-  }
-
   Future<void> _pickRecurrence(BuildContext context) async {
     final r = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (_) => RecurrenceDialog(initial: t.recurrence, deadline: t.deadline),
+      builder: (_) => RecurrenceDialog(initial: t.recurrence, deadline: t.plans.isEmpty ? app.repo.today : t.plans.first.date),
     );
     if (r != null) _set('recurrence', r);
   }
@@ -431,8 +383,9 @@ class _Row extends StatelessWidget {
   final Widget? trailing;
   final Widget? leading;
   final VoidCallback? onTap;
-  final bool active, danger, flat;
+  final bool active;
   const _Row({
+    super.key,
     required this.icon,
     required this.title,
     this.subtitle,
@@ -440,19 +393,17 @@ class _Row extends StatelessWidget {
     this.leading,
     this.onTap,
     this.active = false,
-    this.danger = false,
-    this.flat = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final color = danger ? cs.error : (active ? cs.primary : cs.onSurface);
+    final color = active ? cs.primary : cs.onSurface;
     final row = Row(
       children: [
         SizedBox(
           width: 24,
-          child: Center(child: leading ?? Icon(icon, size: 20, color: danger ? cs.error : (active ? cs.primary : mutedOf(context)))),
+          child: Center(child: leading ?? Icon(icon, size: 20, color: active ? cs.primary : mutedOf(context))),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -472,14 +423,6 @@ class _Row extends StatelessWidget {
       ],
     );
     const pad = EdgeInsets.symmetric(horizontal: 10, vertical: 10);
-    if (flat)
-      return InkWell(
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 46),
-          child: Padding(padding: pad, child: row),
-        ),
-      );
     return Plate(
       padding: pad,
       onTap: onTap,
@@ -692,6 +635,7 @@ class _RecurrenceDialogState extends State<RecurrenceDialog> {
   late Set<int> days = ((widget.initial?['days'] as List?) ?? [parseDate(widget.deadline).weekday]).map((e) => (e as num).toInt()).toSet();
   late int n = (widget.initial?['n'] as num?)?.toInt() ?? 2;
   late String unit = (widget.initial?['unit'] ?? 'day') as String;
+  late Set<int> mdays = ((widget.initial?['type'] == 'monthdays' ? widget.initial!['days'] as List? : null) ?? [parseDate(widget.deadline).day]).map((e) => (e as num).toInt()).toSet();
 
   @override
   Widget build(BuildContext context) {
@@ -751,6 +695,36 @@ class _RecurrenceDialogState extends State<RecurrenceDialog> {
                     ],
                   ),
                 ),
+              const RadioListTile(value: 'monthdays', title: Text('По числам месяца')),
+              if (type == 'monthdays')
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, bottom: 8),
+                  child: Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: [
+                      for (var d = 1; d <= 31; d++)
+                        SizedBox(
+                          width: 38,
+                          child: FilterChip(
+                            key: ValueKey('mday-$d'),
+                            label: SizedBox(width: double.infinity, child: Text('$d', textAlign: TextAlign.center)),
+                            showCheckmark: false,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            labelPadding: EdgeInsets.zero,
+                            selected: mdays.contains(d),
+                            onSelected: (v) => setState(() => v ? mdays.add(d) : mdays.remove(d)),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              if (type == 'monthdays' && mdays.any((d) => d > 28))
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, bottom: 8),
+                  child: Text('Если в месяце нет такого числа — в последний день месяца', style: TextStyle(fontSize: 12, color: mutedOf(context))),
+                ),
               const RadioListTile(value: 'yearly', title: Text('Ежегодно')),
             ],
           ),
@@ -761,8 +735,10 @@ class _RecurrenceDialogState extends State<RecurrenceDialog> {
         FilledButton(
           onPressed: () {
             if (type == 'weekly' && days.isEmpty) return;
+            if (type == 'monthdays' && mdays.isEmpty) return;
             Navigator.pop(context, switch (type) {
               'weekly' => {'type': 'weekly', 'days': days.toList()..sort()},
+              'monthdays' => {'type': 'monthdays', 'days': mdays.toList()..sort()},
               'interval' => {'type': 'interval', 'n': n, 'unit': unit},
               _ => {'type': type},
             });

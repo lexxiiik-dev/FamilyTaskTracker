@@ -31,20 +31,21 @@ PlatformHooks createPlatform() {
 
 final _notifications = FlutterLocalNotificationsPlugin();
 
-const _androidDetails = NotificationDetails(
+/// Несколько строк (общее утреннее уведомление) показываются целиком.
+NotificationDetails _androidDetails(String body) => NotificationDetails(
   android: AndroidNotificationDetails(
     'reminders',
     'Напоминания',
-    channelDescription: 'Напоминания о задачах и дедлайнах',
+    channelDescription: 'Напоминания о задачах',
     importance: Importance.max,
     priority: Priority.high,
     category: AndroidNotificationCategory.reminder,
     // в строке уведомлений — белая галочка, в самом уведомлении она окрашена в цвет приложения
     icon: 'ic_stat_check',
-    color: Color(0xFF3F6B4A),
+    color: const Color(0xFF3F6B4A),
+    styleInformation: body.contains('\n') ? BigTextStyleInformation(body) : null,
   ),
 );
-
 // ============================================================ Windows
 
 // проверочный запуск с отдельным каталогом данных не мешает работающему приложению
@@ -243,12 +244,26 @@ $toast = New-Object Windows.UI.Notifications.ToastNotification $doc
         }
         await _buildMenu();
       case 'quit':
-        _ticker?.cancel();
-        await trayManager.destroy();
-        await _instanceLock?.close();
-        await windowManager.setPreventClose(false);
-        await windowManager.destroy();
+        await _quit();
     }
+  }
+
+  /// «Выход» в трее завершает процесс целиком. Одного закрытия окна мало: движок Flutter,
+  /// таймеры и запросы синхронизации держали процесс живым в фоне.
+  Future<void> _quit() async {
+    _ticker?.cancel();
+    Future<void> step(Future<void> Function() f) async {
+      try {
+        await f().timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
+
+    await step(() => trayManager.destroy());
+    await step(() async => _app.repo.st.close());
+    await step(() async => _instanceLock?.close());
+    await step(() => windowManager.setPreventClose(false));
+    await step(() => windowManager.hide());
+    exit(0);
   }
 
   bool _busy = false;
@@ -377,7 +392,7 @@ Future<void> refreshAndroid(Repo repo) async {
     }
     for (final r in plan.showNow) {
       // задача пришла уже после времени напоминания — показываем сразу
-      await _notifications.show(id: r.nid, title: r.title.isEmpty ? 'Задача' : r.title, body: r.body, payload: r.taskId, notificationDetails: _androidDetails);
+      await _notifications.show(id: r.nid, title: r.title.isEmpty ? 'Задача' : r.title, body: r.body, payload: r.taskId, notificationDetails: _androidDetails(r.body));
     }
     for (final r in plan.schedule) {
       await _notifications.zonedSchedule(
@@ -386,7 +401,7 @@ Future<void> refreshAndroid(Repo repo) async {
         body: r.body,
         payload: r.taskId,
         scheduledDate: tz.TZDateTime.fromMillisecondsSinceEpoch(tz.UTC, r.at),
-        notificationDetails: _androidDetails,
+        notificationDetails: _androidDetails(r.body),
         androidScheduleMode: exact ? AndroidScheduleMode.exactAllowWhileIdle : AndroidScheduleMode.inexactAllowWhileIdle,
       );
     }
@@ -411,11 +426,40 @@ Map<String, dynamic> widgetSnapshot(Repo r) {
     'important': t.important,
     'done': t.done,
     'can': r.canToggle(t) && (t.done || r.closeBlocker(t) == null),
-    // вторая строка: срок и, для чужих задач, исполнитель
-    'due': [if (t.deadline.isNotEmpty) humanDate(t.deadline, today), if (!t.isPrivate && t.assigneeId != r.me) r.userName(t.assigneeId)].join(' · '),
+    // вторая строка: ближайший пункт планирования и, для чужих задач, исполнитель
+    'due': [
+      if (r.nextPlan(t) case final p?) p.timed ? '${humanDate(p.date, today)}, ${fmtMin(p.from)}' : humanDate(p.date, today),
+      if (!t.isPrivate && t.assigneeId != r.me) r.userName(t.assigneeId),
+    ].join(' · '),
     'overdue': r.overdue(t),
   };
+
+  /// «Планирование» в виджете — только сегодняшний день: задачи по времени их пунктов
+  /// (сначала без времени), во второй строке — время сегодняшних пунктов.
+  List<Map<String, dynamic>> schedule() {
+    final all = r.tasksOf(secSchedule, allUsers: true).where((t) => !mineOnly || t.assigneeId == r.me);
+    final items = <(Ent, List<PlanItem>)>[
+      for (final t in all)
+        if (t.plans.where((p) => p.date == today).toList() case final ps when ps.isNotEmpty) (t, ps)
+    ]..sort((a, b) {
+        if (a.$1.done != b.$1.done) return a.$1.done ? 1 : -1;
+        final c = a.$2.first.from.compareTo(b.$2.first.from);
+        return c != 0 ? c : a.$1.createdAt.compareTo(b.$1.createdAt);
+      });
+    return [
+      for (final (t, ps) in items.take(100))
+        {
+          ...row(t),
+          'due': [
+            ps.map((p) => p.timed ? '${fmtMin(p.from)}–${fmtMin(p.to)}' : 'без времени').join(', '),
+            if (!t.isPrivate && t.assigneeId != r.me) r.userName(t.assigneeId),
+          ].join(' · '),
+        }
+    ];
+  }
+
   List<Map<String, dynamic>> rows(String section) {
+    if (section == secSchedule) return schedule();
     // задачи раздела независимо от режима «Только свои» в приложении (у виджета своя настройка):
     // сначала те, где пользователь исполнитель, затем чужие, в конце закрытые
     final all = r.tasksOf(section, allUsers: true);
@@ -437,14 +481,16 @@ Map<String, dynamic> widgetSnapshot(Repo r) {
   final sections = <Map<String, dynamic>>[
     {'id': secToday, 'name': 'Сегодняшний день'},
     {'id': secImportant, 'name': 'Важные'},
-    {'id': secPlanned, 'name': 'Запланировано'},
+    {'id': secSchedule, 'name': 'Планирование'},
     {'id': secTasks, 'name': 'Задачи'},
     {'id': secPrivate, 'name': 'Мои дела'},
     for (final l in r.allLists) {'id': l.id, 'name': l.name},
   ];
+  final tasks = {for (final s in sections) s['id'] as String: rows(s['id'] as String)};
   return {
     'lists': sections,
-    'tasks': {for (final s in sections) s['id'] as String: rows(s['id'] as String)},
+    // виджет, настроенный на прежний раздел «Запланировано», показывает «Планирование»
+    'tasks': {...tasks, secPlanned: tasks[secSchedule]},
     'style': widgetStyle(r),
   };
 }

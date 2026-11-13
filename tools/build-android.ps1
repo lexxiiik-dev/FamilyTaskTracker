@@ -17,7 +17,7 @@ if (-not (Test-Path "$android\key.properties")) {
 }
 Push-Location "$root\app"
 try {
-    if ($Debug) { flutter build apk --debug } else { flutter build apk --release }
+    if ($Debug) { flutter build apk --debug } else { flutter build apk --release --no-tree-shake-icons }
     if ($LASTEXITCODE) { throw 'flutter build apk failed' }
     Get-ChildItem "$root\app\build\app\outputs\flutter-apk\*.apk" | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
 } finally { Pop-Location }

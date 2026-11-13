@@ -13,11 +13,69 @@ const Map<String, dynamic> taskDefaults = {
   'status': 'open',
   'is_important': false,
   'in_today': false,
+  'plans': <dynamic>[],
   'recurrence': null,
   'sort_order': 0,
   'deleted': false,
 };
-const Map<String, dynamic> listDefaults = {'name': '', 'assignee_id': '', 'sort_order': 0, 'deleted': false, 'delete_tasks': false};
+const Map<String, dynamic> listDefaults = {'name': '', 'assignee_id': '', 'sort_order': 0, 'deleted': false, 'delete_tasks': false, 'color': ''};
+
+/// Пункт планирования задачи: день и, если задано, время с [from] до [to] (минуты от начала дня).
+/// Пункт без времени показывается пунктиром в начале дня. [notify] — уведомление: у пункта со временем
+/// за [before] минут до начала, у пункта без времени — в стандартное время уведомлений.
+class PlanItem {
+  final String id;
+  final String date;
+  final int from, to;
+  final bool notify;
+  final int before;
+  const PlanItem(this.id, this.date, {this.from = -1, this.to = -1, this.notify = false, this.before = 60});
+
+  bool get timed => from >= 0 && to > from;
+
+  factory PlanItem.fromJson(Map m) {
+    final f = (m['from'] as num?)?.toInt() ?? -1, t = (m['to'] as num?)?.toInt() ?? -1;
+    final ok = f >= 0 && t > f && t <= 1440;
+    return PlanItem((m['id'] ?? '').toString(), (m['date'] ?? '').toString(),
+        from: ok ? f : -1, to: ok ? t : -1, notify: m['notify'] == true, before: (m['before'] as num?)?.toInt() ?? 60);
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'date': date,
+        if (timed) 'from': from,
+        if (timed) 'to': to,
+        if (notify) 'notify': true,
+        if (notify && timed) 'before': before,
+      };
+
+  PlanItem copyWith({String? id, String? date, int? from, int? to, bool? notify, int? before}) =>
+      PlanItem(id ?? this.id, date ?? this.date, from: from ?? this.from, to: to ?? this.to, notify: notify ?? this.notify, before: before ?? this.before);
+
+  /// Пункт без времени (время снято).
+  PlanItem untimed() => PlanItem(id, date, notify: notify, before: before);
+
+  /// Порядок: по дню, в дне сначала пункты без времени, затем по началу.
+  static int compare(PlanItem a, PlanItem b) {
+    final c = a.date.compareTo(b.date);
+    if (c != 0) return c;
+    if (a.from != b.from) return a.from.compareTo(b.from);
+    return a.id.compareTo(b.id);
+  }
+}
+
+String fmtMin(int m) => '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
+
+/// «за 1 ч», «за 30 мин», «в момент начала».
+String beforeLabel(int m) {
+  if (m <= 0) return 'в момент начала';
+  if (m % 1440 == 0) return 'за ${m ~/ 1440} дн.';
+  if (m % 60 == 0) return 'за ${m ~/ 60} ч';
+  if (m > 60) return 'за ${m ~/ 60} ч ${m % 60} мин';
+  return 'за $m мин';
+}
+
+const beforeOptions = [0, 5, 10, 15, 30, 60, 120, 180, 1440];
 
 Map<String, dynamic> defaultsOf(String kind) => kind == 'list' ? listDefaults : taskDefaults;
 
@@ -45,6 +103,7 @@ class Ent {
       if (src.containsKey(k)) f[k] = src[k];
     }
     if (f['checklist'] == null && kind == 'task') f['checklist'] = <dynamic>[];
+    if (f['plans'] == null && kind == 'task') f['plans'] = <dynamic>[];
     return Ent(
       kind,
       j['id'] as String,
@@ -76,12 +135,22 @@ class Ent {
   bool get done => s('status') == 'done';
   bool get important => b('is_important');
   bool get inToday => b('in_today');
+
+  /// Пункты планирования по порядку.
+  List<PlanItem> get plans {
+    final out = ((f['plans'] as List?) ?? const []).whereType<Map>().map(PlanItem.fromJson).where((p) => p.date.length == 10).toList();
+    out.sort(PlanItem.compare);
+    return out;
+  }
+
+  bool get planned => plans.isNotEmpty;
   bool get deleted => b('deleted');
   Map<String, dynamic>? get recurrence => (f['recurrence'] as Map?)?.cast<String, dynamic>();
   List<Map<String, dynamic>> get checklist => ((f['checklist'] as List?) ?? const []).whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
   int get completedAt => done ? (t['status'] ?? 0) : 0;
   // список
   String get name => s('name');
+  String get color => s('color');
 }
 
 class User {
@@ -122,6 +191,7 @@ String _addMonths(String date, int months) {
 /// Правило повторения:
 ///   {type: daily} | {type: weekly, days: [1..7]} (1 — понедельник)
 ///   {type: interval, n: N, unit: day|week|month} | {type: yearly}
+///   {type: monthdays, days: [1..31]} — по числам месяца (31 в коротком месяце — последний день)
 /// Возвращает следующий дедлайн после [deadline]; если он уже в прошлом — ближайший не раньше [today].
 String nextDeadline(String deadline, Map<String, dynamic> rule, String today) {
   String step(String d) {
@@ -147,6 +217,18 @@ String nextDeadline(String deadline, Map<String, dynamic> rule, String today) {
         }
       case 'yearly':
         return _addMonths(d, 12);
+      case 'monthdays':
+        final days = ((rule['days'] as List?) ?? const []).map((e) => (e as num).toInt()).toSet();
+        if (days.isEmpty) return _addMonths(d, 1);
+        var x = d;
+        for (var i = 0; i < 62; i++) {
+          x = addDays(x, 1);
+          final p = parseDate(x);
+          final last = DateTime.utc(p.year, p.month + 1, 0).day;
+          // число, которого в этом месяце нет (31 в ноябре), переносится на последний день месяца
+          if (days.contains(p.day) || (p.day == last && days.any((n) => n > last))) return x;
+        }
+        return _addMonths(d, 1);
       default:
         return addDays(d, 1);
     }
@@ -176,6 +258,9 @@ String describeRecurrence(Map<String, dynamic>? r) {
       return 'Каждые $n $unit';
     case 'yearly':
       return 'Ежегодно';
+    case 'monthdays':
+      final days = ((r['days'] as List?) ?? const []).map((e) => (e as num).toInt()).toList()..sort();
+      return 'Каждый месяц: ${days.join(', ')} числа';
   }
   return 'Повторять';
 }

@@ -14,7 +14,7 @@ const _uuid = Uuid();
 const localUserId = 'local';
 
 /// Встроенные разделы левого меню.
-const secToday = 'today', secImportant = 'important', secPlanned = 'planned', secTasks = 'tasks', secPrivate = 'private';
+const secToday = 'today', secImportant = 'important', secPlanned = 'planned', secTasks = 'tasks', secPrivate = 'private', secSchedule = 'schedule';
 
 /// Встроенный раздел (не пользовательский список).
 /// Цвета виджета Android в локальных настройках устройства: фон, окантовка, текст, акцент.
@@ -26,7 +26,7 @@ int widgetAlpha(Repo r) => (int.tryParse(r.kv['w_alpha'] ?? '') ?? 100).clamp(0,
 /// Виджет показывает только задачи, где пользователь исполнитель (иначе — все задачи списка).
 bool widgetMineOnly(Repo r) => !r.isLocal && r.kv['w_scope'] == 'mine';
 
-bool isBuiltinSection(String s) => s == secToday || s == secImportant || s == secPlanned || s == secTasks || s == secPrivate;
+bool isBuiltinSection(String s) => s == secToday || s == secImportant || s == secPlanned || s == secTasks || s == secPrivate || s == secSchedule;
 
 class Repo extends ChangeNotifier {
   final Storage st;
@@ -156,7 +156,11 @@ class Repo extends ChangeNotifier {
   }
 
   String get viewMode => setting<String>('view_mode', 'all'); // all | mine
-  String get homeSection => setting<String>('home_list', secToday);
+  /// Раздел «Запланировано» убран: его заменило «Планирование».
+  String get homeSection {
+    final s = setting<String>('home_list', secToday);
+    return s == secPlanned ? secSchedule : s;
+  }
   String get deadlineTime => setting<String>('deadline_time', '09:00');
 
   // ---- время ----
@@ -187,7 +191,24 @@ class Repo extends ChangeNotifier {
 
   String dateOfMoment(int ms) => fmtDate(tz.TZDateTime.fromMillisecondsSinceEpoch(loc, ms));
 
-  bool overdue(Ent t) => !t.done && t.deadline.isNotEmpty && t.deadline.compareTo(today) < 0;
+  /// Просрочена: все пункты планирования остались в прошлых днях (до переноса на сегодня).
+  bool overdue(Ent t) {
+    if (t.done) return false;
+    final p = t.plans;
+    return p.isNotEmpty && p.last.date.compareTo(today) < 0;
+  }
+
+  /// Ближайший пункт планирования (сегодня и дальше; если таких нет — последний).
+  PlanItem? nextPlan(Ent t) {
+    final p = t.plans;
+    if (p.isEmpty) return null;
+    final td = today;
+    for (final x in p) {
+      if (x.date.compareTo(td) >= 0) return x;
+    }
+    return p.last;
+  }
+
 
   // ---- права (сервер проверяет то же самое) ----
 
@@ -253,14 +274,16 @@ class Repo extends ChangeNotifier {
     return c != 0 ? c : a.id.compareTo(b.id);
   }
 
-  /// Задача закрыта в один из прошлых дней: метка «Сегодня» с неё снимается по окончании дня.
+  /// Задача закрыта в один из прошлых дней.
   bool _closedBefore(Ent t, String today) => t.done && t.completedAt > 0 && dateOfMoment(t.completedAt).compareTo(today) < 0;
 
-  bool _inToday(Ent t, String today) =>
-      (t.inToday && !_closedBefore(t, today)) ||
-      (t.deadline.isNotEmpty && t.deadline.compareTo(today) <= 0 && !t.done) ||
-      (t.deadline == today) ||
-      (t.reminderAt > 0 && dateOfMoment(t.reminderAt) == today);
+  /// «Сегодняшний день» — задачи с пунктом планирования на сегодня.
+  bool _inToday(Ent t, String today) => t.plans.any((p) => p.date == today);
+
+  /// Есть ли у задачи пункт на сегодня (кнопка «Добавить в „Сегодня“» тогда скрыта).
+  bool plannedToday(Ent t) => _inToday(t, today);
+
+
 
   /// Задачи раздела или списка (без учёта вложенности).
   List<Ent> tasksOf(String section, {bool allUsers = false}) {
@@ -273,7 +296,8 @@ class Repo extends ChangeNotifier {
         case secImportant:
           return t.important;
         case secPlanned:
-          return t.deadline.isNotEmpty;
+        case secSchedule:
+          return t.planned;
         case secTasks:
           return t.listId.isEmpty;
         case secPrivate:
@@ -342,13 +366,39 @@ class Repo extends ChangeNotifier {
     if (t.assigneeId == uid) return;
     _set(t, 'assignee_id', uid);
   }
+  // ---- пункты планирования ----
+
+  String newPlanId() => _uuid.v4().substring(0, 8);
+
+  /// Записать пункты планирования (автор или исполнитель). Для черновика меняется только сам объект.
+  Future<void> setPlans(Ent t, List<PlanItem> items) async {
+    final list = [...items]..sort(PlanItem.compare);
+    _set(t, 'plans', [for (final p in list) p.toJson()]);
+    if (tasks.containsKey(t.id)) {
+      await _save([t]);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// Добавить пункт или заменить пункт с тем же id.
+  Future<void> putPlan(Ent t, PlanItem p) => setPlans(t, [for (final x in t.plans) if (x.id != p.id) x, p]);
+
+  Future<void> removePlan(Ent t, String id) => setPlans(t, [for (final x in t.plans) if (x.id != id) x]);
+
+  /// «Добавить в „Сегодня“»: пункт без времени на сегодня.
+  Future<void> addToday(Ent t) async {
+    if (plannedToday(t)) return;
+    await putPlan(t, PlanItem(newPlanId(), today));
+  }
 
   /// Черновик новой задачи (в базу не пишется, пока не вызван [addTask]).
+  /// [date] — пункт планирования без времени на этот день.
   Ent draftTask({
     String title = '',
     String listId = '',
     bool private = false,
-    String deadline = '',
+    String date = '',
     String parentId = '',
     bool inToday = false,
     bool important = false,
@@ -362,8 +412,8 @@ class Repo extends ChangeNotifier {
     } else if (listId.isNotEmpty) {
       _set(t, 'list_id', listId);
     }
-    if (deadline.isNotEmpty) _set(t, 'deadline', deadline);
-    if (inToday) _set(t, 'in_today', true);
+    if (inToday && date.isEmpty) date = today;
+    if (date.isNotEmpty) _set(t, 'plans', [PlanItem(newPlanId(), date).toJson()]);
     if (important) _set(t, 'is_important', true);
     _set(t, 'assignee_id', me);
     _applyListRules(t);
@@ -379,9 +429,8 @@ class Repo extends ChangeNotifier {
 
   /// Изменить поле задачи. Для черновика (ещё не в базе) меняется только сам объект.
   Future<void> setTaskField(Ent t, String k, dynamic v) async {
-    // срок нельзя поставить на прошедший день (просроченный срок можно только сменить на новый или снять)
-    if (k == 'deadline' && v is String && v.isNotEmpty && v.compareTo(today) < 0) return;
     final changed = <Ent>[t];
+
     if (k == 'assignee_id') {
       _setAssignee(t, v as String);
     } else {
@@ -395,7 +444,6 @@ class Repo extends ChangeNotifier {
         changed.add(c);
       }
     }
-    if (k == 'deadline' && (v as String).isEmpty) _set(t, 'recurrence', null); // повторению нужен дедлайн
     if (tasks.containsKey(t.id)) {
       await _save(changed);
     } else {
@@ -403,20 +451,70 @@ class Repo extends ChangeNotifier {
     }
   }
 
-  /// Конец дня для «Сегодня»: с задач, закрытых в прошлые дни, метка снимается.
-  /// Открытые задачи с меткой переносятся на новый день как есть (если метку не сняли вручную).
-  /// В разделе такие задачи не видны и без этого (см. [_inToday]); здесь метка снимается
-  /// в данных, чтобы задача, переоткрытая потом, не вернулась в «Сегодня» сама.
-  Future<void> rollToday() async {
+  /// Пункты, полученные из полей прежних версий (срок, напоминание, «Сегодня»),
+  /// которые изменены позже пунктов планирования (или пунктов ещё не было).
+  List<PlanItem> _legacyPlans(Ent t, String td) {
+    final since = t.t['plans'] ?? -1;
+    bool fresh(String k) => (t.t[k] ?? 0) > since;
+    final out = <PlanItem>[];
+    if (fresh('reminder_at') && t.reminderAt > 0) {
+      final d = dateOfMoment(t.reminderAt), a = localOf(t.reminderAt);
+      final from = a.hour * 60 + a.minute;
+      // задача с напоминанием занимает на шкале полчаса от времени напоминания
+      out.add(PlanItem('lr${t.reminderAt.toRadixString(36)}', d, from: from, to: (from + 30).clamp(from + 1, 1440), notify: true, before: 0));
+    }
+    if (fresh('deadline') && t.deadline.isNotEmpty) {
+      out.add(PlanItem('ld${t.deadline.replaceAll('-', '')}', t.deadline, notify: true));
+    }
+    if (fresh('in_today') && t.inToday && !_closedBefore(t, td)) {
+      out.add(PlanItem('lt${td.replaceAll('-', '')}', td));
+    }
+    return out;
+  }
+
+  /// Ежедневное обслуживание пунктов планирования (после каждой синхронизации):
+  /// - поля прежних версий переводятся в пункты;
+  /// - открытая задача, у которой все пункты остались в прошлых днях, получает пункт без времени на сегодня;
+  /// - у закрытой задачи убираются пункты на дни после закрытия.
+  /// Делают это автор и исполнитель (им можно менять пункты).
+  Future<void> dailyMaintenance() async {
     final td = today;
     final changed = <Ent>[];
     for (final t in tasks.values) {
-      if (t.deleted || !t.inToday || !_closedBefore(t, td) || !canToggle(t)) continue;
-      _set(t, 'in_today', false);
+      if (t.deleted || !canToggle(t)) continue;
+      var items = t.plans;
+      var dirty = false;
+      for (final p in _legacyPlans(t, td)) {
+        // пункт без времени не нужен, если на этот день уже что-то есть
+        if (items.any((x) => x.id == p.id || (x.date == p.date && (!p.timed || x.from == p.from)))) continue;
+        items = [...items, p];
+        dirty = true;
+      }
+      if (!t.done && items.isNotEmpty && items.every((p) => p.date.compareTo(td) < 0)) {
+        items = [...items, PlanItem('roll${td.replaceAll('-', '')}', td)];
+        dirty = true;
+      }
+      if (t.done && t.completedAt > 0) {
+        final closed = dateOfMoment(t.completedAt);
+        final keep = items.where((p) => p.date.compareTo(closed) <= 0).toList();
+        if (keep.length != items.length) {
+          items = keep;
+          dirty = true;
+        }
+      }
+      // пункты записываются и тогда, когда поля прежних версий есть, а пунктов нет: больше их не разбираем
+      if (!dirty && t.t['plans'] != null) continue;
+      if (!dirty && !_hasLegacy(t)) continue;
+      items.sort(PlanItem.compare);
+      _set(t, 'plans', [for (final p in items) p.toJson()]);
+      if (!dirty) t.t['plans'] = clock(); // значение то же — отметка, что поля прежних версий разобраны
+      if (!dirty) t.d.add('plans');
       changed.add(t);
     }
     if (changed.isNotEmpty) await _save(changed);
   }
+
+  bool _hasLegacy(Ent t) => t.deadline.isNotEmpty || t.reminderAt > 0 || t.inToday;
 
   /// Почему задачу нельзя закрыть (или null, если можно).
   String? closeBlocker(Ent t) {
@@ -428,37 +526,38 @@ class Repo extends ChangeNotifier {
   Future<void> setDone(Ent t, bool done) async {
     if (done && closeBlocker(t) != null) return;
     final changed = <Ent>[t];
-    final shownToday = _inToday(t, today);
+    final td = today;
+    final items = t.plans;
     _set(t, 'status', done ? 'done' : 'open');
     final rule = t.recurrence;
-    if (done && rule != null && t.deadline.isNotEmpty && t.parentId.isEmpty) {
+    if (done && rule != null && t.parentId.isEmpty) {
       // ID следующего экземпляра выводится из ID текущего: если задачу закроют на двух
       // устройствах офлайн, получится один и тот же экземпляр, а не два
       final nextId = _uuid.v5(_nsFor(t.id), 'next');
       if (!tasks.containsKey(nextId)) {
-        final nd = nextDeadline(t.deadline, rule, today);
-        final shift = daysBetween(t.deadline, nd);
+        // отсчёт — от первого пункта планирования (или от сегодняшнего дня); все пункты сдвигаются вместе
+        final base = items.isEmpty ? td : items.first.date;
+        final nd = nextDeadline(base, rule, td);
+        final shift = daysBetween(base, nd);
         final n = Ent('task', nextId, creatorId: t.creatorId, isPrivate: t.isPrivate, createdAt: clock());
         _set(n, 'title', t.title);
         _set(n, 'description', t.description);
-        _set(n, 'checklist', [
-          for (final c in t.checklist) {'text': c['text'], 'done': false},
-        ]);
+        _set(n, 'checklist', [for (final c in t.checklist) {'text': c['text'], 'done': false}]);
         _set(n, 'list_id', t.listId);
         _set(n, 'assignee_id', t.assigneeId);
         _set(n, 'is_important', t.important);
         _set(n, 'recurrence', rule);
-        _set(n, 'deadline', nd);
-        if (t.reminderAt > 0) _set(n, 'reminder_at', t.reminderAt + shift * 86400000);
+        _set(n, 'plans', [
+          if (items.isEmpty) PlanItem(_uuid.v5(_nsFor(nextId), 'p0').substring(0, 8), nd).toJson(),
+          for (final p in items) p.copyWith(id: _uuid.v5(_nsFor(nextId), p.id).substring(0, 8), date: addDays(p.date, shift)).toJson(),
+        ]);
         tasks[n.id] = n;
         changed.add(n);
         for (final c in children(t.id)) {
           final cn = Ent('task', _uuid.v5(_nsFor(c.id), 'next'), creatorId: c.creatorId, isPrivate: c.isPrivate, createdAt: clock());
           _set(cn, 'title', c.title);
           _set(cn, 'description', c.description);
-          _set(cn, 'checklist', [
-            for (final x in c.checklist) {'text': x['text'], 'done': false},
-          ]);
+          _set(cn, 'checklist', [for (final x in c.checklist) {'text': x['text'], 'done': false}]);
           _set(cn, 'parent_id', n.id);
           _set(cn, 'list_id', n.listId);
           _set(cn, 'assignee_id', c.assigneeId);
@@ -469,14 +568,11 @@ class Repo extends ChangeNotifier {
       }
     }
     if (done) {
-      // Закрытая задача теряет срок (и повторение — следующий экземпляр уже создан выше):
-      // переоткрытая, она ведёт себя как новая. Исполнителю менять срок нельзя — у его задачи
-      // срок снимет сервер. Задача, которая была в «Сегодня», остаётся там до конца дня.
-      if (canEdit(t) && t.deadline.isNotEmpty) {
-        _set(t, 'deadline', '');
-        if (t.recurrence != null) _set(t, 'recurrence', null);
-      }
-      if (shownToday && !t.inToday) _set(t, 'in_today', true);
+      // Закрытая задача теряет повторение (следующий экземпляр уже создан выше) и пункты
+      // планирования на следующие дни. Сегодняшние и прошлые пункты остаются.
+      if (canEdit(t) && t.recurrence != null) _set(t, 'recurrence', null);
+      final keep = [for (final p in items) if (p.date.compareTo(td) <= 0) p.toJson()];
+      if (keep.length != items.length) _set(t, 'plans', keep);
     }
     await _save(changed);
   }
@@ -495,13 +591,19 @@ class Repo extends ChangeNotifier {
     await _save([t, ...kids]);
   }
 
-  Future<Ent> createList(String name, String assigneeId) async {
+  Future<Ent> createList(String name, String assigneeId, {String color = ''}) async {
     final l = Ent('list', _uuid.v4(), creatorId: me, createdAt: clock());
     _set(l, 'name', name);
     if (assigneeId.isNotEmpty) _set(l, 'assignee_id', assigneeId);
+    if (color.isNotEmpty) _set(l, 'color', color);
     lists[l.id] = l;
     await _save([l]);
     return l;
+  }
+
+  /// Цвет списка (карточки его задач в «Планировании»).
+  Future<void> setListColor(Ent l, String color) async {
+    if (_set(l, 'color', color)) await _save([l]);
   }
 
   Future<void> renameList(Ent l, String name) async {

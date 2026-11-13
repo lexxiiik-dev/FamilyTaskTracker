@@ -28,7 +28,7 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
       unawaited(platform.refresh(repo));
     };
     sync.afterSync = () async {
-      if (repo.loggedIn) await repo.rollToday(); // наступил новый день — снять «Сегодня» с закрытых вчера
+      if (repo.loggedIn) await repo.dailyMaintenance(); // новый день: незакрытые задачи переходят на сегодня
       await platform.refresh(repo);
     };
     WidgetsBinding.instance.addObserver(this);
@@ -112,13 +112,13 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Черновик задачи для текущего раздела (быстрое добавление и полная форма).
-  Ent draftForSection({String title = '', bool private = false, String deadline = '', String? listId}) {
+  Ent draftForSection({String title = '', bool private = false, String date = '', String? listId}) {
     final lid = listId ?? (isBuiltinSection(section) ? '' : section);
     return repo.draftTask(
       title: title,
       listId: lid,
       private: (private || section == secPrivate) && repo.privateAllowed(lid), // в «Моих делах» задача сразу приватная
-      deadline: deadline,
+      date: date,
       inToday: section == secToday,
       important: section == secImportant, // в «Важных» задача сразу со звёздочкой
     );
@@ -132,6 +132,8 @@ class AppState extends ChangeNotifier with WidgetsBindingObserver {
         return 'Важные';
       case secPlanned:
         return 'Запланировано';
+      case secSchedule:
+        return 'Планирование';
       case secTasks:
         return 'Задачи';
       case secPrivate:

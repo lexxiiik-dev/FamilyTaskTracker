@@ -59,7 +59,7 @@ object WidgetData {
         if (out.isEmpty()) {
             out.add("today" to "Сегодняшний день")
             out.add("important" to "Важные")
-            out.add("planned" to "Запланировано")
+            out.add("schedule" to "Планирование")
             out.add("tasks" to "Задачи")
             out.add("private" to "Мои дела")
         }
@@ -82,8 +82,9 @@ object WidgetData {
         return Style(color("bg"), color("border"), color("text"), color("accent"), o.optInt("alpha", 100).coerceIn(0, 100) * 255 / 100)
     }
 
+    /** Раздел виджета; прежний раздел «Запланировано» заменило «Планирование» (только сегодняшний день). */
     fun listOf(context: Context, widgetId: Int): String =
-        prefs(context).getString("widget_list_$widgetId", "today") ?: "today"
+        (prefs(context).getString("widget_list_$widgetId", "today") ?: "today").let { if (it == "planned") "schedule" else it }
 
     fun tasks(context: Context, listId: String): JSONArray =
         snapshot(context).optJSONObject("tasks")?.optJSONArray(listId) ?: JSONArray()
@@ -134,8 +135,11 @@ class TodoWidgetProvider : HomeWidgetProvider() {
             }
             style.muted?.let { views.setTextColor(R.id.widget_empty, it) }
             // заголовок открывает список в приложении, «+» — полную форму добавления задачи
-            views.setOnClickPendingIntent(R.id.widget_title,
-                HomeWidgetLaunchIntent.getActivity(context, MainActivity::class.java, Uri.parse("todo://list?id=" + Uri.encode(listId))))
+            // так же и свободное место: надпись «Задач нет» и область под коротким списком
+            val openList = HomeWidgetLaunchIntent.getActivity(context, MainActivity::class.java, Uri.parse("todo://list?id=" + Uri.encode(listId)))
+            views.setOnClickPendingIntent(R.id.widget_title, openList)
+            views.setOnClickPendingIntent(R.id.widget_empty, openList)
+            views.setOnClickPendingIntent(R.id.widget_rest, openList)
             views.setOnClickPendingIntent(R.id.widget_add,
                 HomeWidgetLaunchIntent.getActivity(context, MainActivity::class.java, Uri.parse("todo://new")))
 
@@ -218,6 +222,8 @@ class TodoWidgetService : RemoteViewsService() {
             // цвета задаются каждый раз заново: строки списка переиспользуются
             val text = style.text ?: context.getColor(R.color.widget_text)
             val muted = style.muted ?: context.getColor(R.color.widget_muted)
+            // подложка строки — цвет текста с малой непрозрачностью: видна и на светлом, и на тёмном фоне
+            views.setInt(R.id.item_bg, "setColorFilter", (text and 0x00FFFFFF) or (0x1C shl 24))
             val due = t.optString("due")
             views.setViewVisibility(R.id.item_due, if (due.isEmpty()) View.GONE else View.VISIBLE)
             views.setTextViewText(R.id.item_due, due)

@@ -14,7 +14,7 @@ class TaskListPane extends StatefulWidget {
 }
 
 class _TaskListPaneState extends State<TaskListPane> {
-  bool _showDone = false;
+  bool _showDone = true; // блок «Завершённые» по умолчанию развёрнут
 
   @override
   Widget build(BuildContext context) => Live(builder: _build);
@@ -32,31 +32,15 @@ class _TaskListPaneState extends State<TaskListPane> {
 
     final rows = <Widget>[];
     void addTask(Ent t, {bool flat = false}) {
-      rows.add(TaskRow(task: t, showList: searching || section == secToday || section == secImportant || section == secPlanned || section == secPrivate));
+      rows.add(TaskRow(task: t, showList: searching || section == secToday || section == secImportant || section == secPrivate));
       if (flat) return;
       for (final c in repo.children(t.id)) {
         rows.add(TaskRow(task: c, indent: true));
       }
     }
 
-    if (!searching && section == secPlanned) {
-      // группы по дате: просрочено, сегодня, завтра, дальше по датам
-      final today = repo.today;
-      final planned = all.where((t) => !t.done).toList()..sort((a, b) => a.deadline.compareTo(b.deadline));
-      String group(Ent t) => t.deadline.compareTo(today) < 0 ? 'Просрочено' : humanDate(t.deadline, today);
-      String? last;
-      for (final t in planned) {
-        final g = group(t);
-        if (g != last) {
-          rows.add(_GroupHeader(g, danger: g == 'Просрочено'));
-          last = g;
-        }
-        addTask(t, flat: true);
-      }
-    } else {
-      for (final t in open) {
-        addTask(t);
-      }
+    for (final t in open) {
+      addTask(t);
     }
     if (done.isNotEmpty) {
       rows.add(
@@ -82,7 +66,7 @@ class _TaskListPaneState extends State<TaskListPane> {
       );
       if (_showDone) {
         for (final t in done) {
-          addTask(t, flat: section == secPlanned);
+          addTask(t);
         }
       }
     }
@@ -116,7 +100,16 @@ class _TaskListPaneState extends State<TaskListPane> {
                 ),
               ),
               if (!searching && list != null && repo.canEdit(list))
-                IconButton(icon: const Icon(Icons.more_horiz), tooltip: 'Список', onPressed: () => showListMenu(context, list)),
+                Builder(
+                  builder: (c) => IconButton(
+                    icon: const Icon(Icons.more_horiz),
+                    tooltip: 'Список',
+                    onPressed: () {
+                      final b = c.findRenderObject() as RenderBox;
+                      showListMenu(context, list, at: b.localToGlobal(b.size.bottomLeft(Offset.zero)));
+                    },
+                  ),
+                ),
             ],
           ),
         ),
@@ -139,19 +132,6 @@ class _TaskListPaneState extends State<TaskListPane> {
   }
 }
 
-class _GroupHeader extends StatelessWidget {
-  final String text;
-  final bool danger;
-  const _GroupHeader(this.text, {this.danger = false});
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(6, 14, 6, 6),
-    child: Text(
-      text,
-      style: TextStyle(fontWeight: FontWeight.w700, color: danger ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.primary),
-    ),
-  );
-}
 
 /// Попытка закрыть/переоткрыть задачу с проверкой прав и открытых подзадач.
 Future<void> toggleDone(BuildContext context, Ent t) async {
@@ -208,14 +188,18 @@ class TaskRow extends StatelessWidget {
     }
 
     if (showList && t.listId.isNotEmpty) add(repo.lists[t.listId]?.name ?? '');
-    if (t.deadline.isNotEmpty) {
+    // ближайший пункт планирования (и сколько их ещё)
+    final next = repo.nextPlan(t);
+    if (next != null) {
+      final more = t.plans.length - 1;
+      final label = next.timed ? '${humanDate(next.date, repo.today)}, ${fmtMin(next.from)}' : humanDate(next.date, repo.today);
       add(
-        humanDate(t.deadline, repo.today),
-        color: repo.overdue(t) ? cs.error : (t.deadline == repo.today && !t.done ? cs.primary : null),
-        icon: Icons.event_outlined,
+        more > 0 ? '$label +$more' : label,
+        color: repo.overdue(t) ? cs.error : (next.date == repo.today && !t.done ? cs.primary : null),
+        icon: next.timed ? Icons.schedule : Icons.event_outlined,
       );
+      if (t.plans.any((p) => p.notify)) add('', icon: Icons.notifications_none);
     }
-    if (t.reminderAt > 0) add('', icon: Icons.notifications_none);
     if (t.recurrence != null) add('', icon: Icons.repeat);
     final cl = t.checklist;
     if (cl.isNotEmpty) add('${cl.where((c) => c['done'] == true).length}/${cl.length}', icon: Icons.checklist);
@@ -293,7 +277,7 @@ class _QuickAddState extends State<QuickAdd> {
   final _c = TextEditingController();
   final _focus = FocusNode();
   bool _private = false;
-  String _deadline = '';
+  String _date = ''; // день пункта планирования без времени
 
   @override
   void dispose() {
@@ -305,13 +289,8 @@ class _QuickAddState extends State<QuickAdd> {
   String get _listId => app.repo.lists.containsKey(app.section) ? app.section : '';
 
   Future<Ent?> _draft() async {
-    // в «Запланировано» без даты задачу не создать
-    if (app.section == secPlanned && _deadline.isEmpty) {
-      final d = await pickDate(context, '', app.repo.today);
-      if (d == null) return null;
-      setState(() => _deadline = d);
-    }
-    return app.draftForSection(title: _c.text.trim(), private: _private, deadline: _deadline);
+    return app.draftForSection(title: _c.text.trim(), private: _private, date: _date);
+
   }
 
   Future<void> _submit() async {
@@ -320,7 +299,7 @@ class _QuickAddState extends State<QuickAdd> {
     if (d == null) return;
     await app.repo.addTask(d);
     _c.clear();
-    setState(() => _deadline = '');
+    setState(() => _date = '');
     _focus.requestFocus();
   }
 
@@ -328,7 +307,7 @@ class _QuickAddState extends State<QuickAdd> {
     final d = await _draft();
     if (d == null) return;
     _c.clear();
-    setState(() => _deadline = '');
+    setState(() => _date = '');
     app.startDraft(d);
   }
 
@@ -376,11 +355,11 @@ class _QuickAddState extends State<QuickAdd> {
                 onSubmitted: (_) => _submit(),
               ),
             ),
-            if (_deadline.isNotEmpty)
+            if (_date.isNotEmpty)
               InputChip(
-                label: Text(humanDate(_deadline, repo.today), style: const TextStyle(fontSize: 12)),
+                label: Text(humanDate(_date, repo.today), style: const TextStyle(fontSize: 12)),
                 visualDensity: VisualDensity.compact,
-                onDeleted: () => setState(() => _deadline = ''),
+                onDeleted: () => setState(() => _date = ''),
               ),
             if (!repo.isLocal)
               IconButton(
@@ -390,12 +369,12 @@ class _QuickAddState extends State<QuickAdd> {
                 onPressed: (allowed && !forced) ? () => setState(() => _private = !_private) : null,
               ),
             IconButton(
-              tooltip: 'Срок',
+              tooltip: 'Запланировать на день',
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.event_outlined, size: 20),
               onPressed: () async {
-                final d = await pickDate(context, _deadline, repo.today);
-                if (d != null) setState(() => _deadline = d);
+                final d = await pickDate(context, _date, repo.today);
+                if (d != null) setState(() => _date = d);
               },
             ),
             IconButton(tooltip: 'Полная форма', visualDensity: VisualDensity.compact, icon: const Icon(Icons.open_in_full, size: 18), onPressed: _full),

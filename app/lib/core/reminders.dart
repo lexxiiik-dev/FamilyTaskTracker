@@ -2,6 +2,7 @@
 // Чистая логика без плагинов — её проверяют тесты.
 import 'dart:convert';
 
+import 'model.dart';
 import 'repo.dart';
 
 class Reminder {
@@ -12,7 +13,11 @@ class Reminder {
   final int at;
   final bool isDeadline;
   final String date; // для напоминаний по дедлайну — день дедлайна
-  const Reminder(this.key, this.taskId, this.title, this.body, this.at, {this.isDeadline = false, this.date = ''});
+  /// Общее утреннее уведомление о задачах дня: [group] — его отметка «показано»,
+  /// [covers] — ключи напоминаний отдельных задач, которые оно заменяет.
+  final String group;
+  final List<String> covers;
+  const Reminder(this.key, this.taskId, this.title, this.body, this.at, {this.isDeadline = false, this.date = '', this.group = '', this.covers = const []});
 
   /// Числовой идентификатор для системного уведомления.
   int get nid {
@@ -27,16 +32,56 @@ class Reminder {
 /// Все напоминания текущего пользователя: уведомления приходят только исполнителю.
 List<Reminder> collectReminders(Repo r) {
   final out = <Reminder>[];
+  final byDay = <String, List<Ent>>{};
   for (final t in r.tasks.values) {
     if (t.deleted || t.done || t.assigneeId != r.me) continue;
-    if (t.reminderAt > 0) {
-      out.add(Reminder('r:${t.id}:${t.reminderAt}', t.id, t.title, 'Напоминание', t.reminderAt));
-    }
-    if (t.deadline.isNotEmpty) {
-      final at = r.momentOf(t.deadline, r.deadlineTime);
-      // свою задачу, созданную уже после времени напоминаний, не объявляем тут же
+    for (final p in t.plans) {
+      if (!p.notify) continue;
+      if (p.timed) {
+        // пункт со временем: уведомление за заданное время до начала
+        final start = r.momentOf(p.date, fmtMin(p.from));
+        final at = start - p.before * 60000;
+        final body = p.before <= 0 ? 'Начало в ${fmtMin(p.from)}' : 'В ${fmtMin(p.from)} (${beforeLabel(p.before).replaceFirst('за ', 'через ')})';
+        out.add(Reminder('p:${t.id}:${p.id}:$at', t.id, t.title, body, at));
+        continue;
+      }
+      // пункт без времени: в стандартное время уведомлений, общим уведомлением за день
+      final at = r.momentOf(p.date, r.deadlineTime);
+      // свою задачу, созданную уже после времени уведомлений, не объявляем тут же
       if (t.creatorId == r.me && t.createdAt > at) continue;
-      out.add(Reminder('d:${t.id}:${t.deadline}:${r.deadlineTime}', t.id, t.title, 'Срок сегодня', at, isDeadline: true, date: t.deadline));
+      final day = byDay[p.date] ??= [];
+      if (!day.contains(t)) day.add(t);
+    }
+  }
+  // Задачи без времени на один день объявляются одним общим уведомлением в назначенное время.
+  // Задача, пришедшая уже после него (поручили позже), объявляется отдельно.
+  final fired = decodeMap(r.kv['fired']);
+  for (final e in byDay.entries) {
+    final date = e.key, at = r.momentOf(date, r.deadlineTime);
+    final all = e.value..sort((a, b) => a.createdAt != b.createdAt ? a.createdAt.compareTo(b.createdAt) : a.id.compareTo(b.id));
+    String one(Ent t) => 'd:${t.id}:$date:${r.deadlineTime}';
+    final group = 'day:$date:${r.deadlineTime}';
+    if (fired.containsKey(group)) {
+      for (final t in all) {
+        out.add(Reminder(one(t), t.id, t.title, 'Задача на сегодня', at, isDeadline: true, date: date));
+      }
+      continue;
+    }
+    // уже объявленные по отдельности (до появления общего уведомления) повторно не объявляются
+    final list = [
+      for (final t in all)
+        if (!fired.containsKey(one(t))) t
+    ];
+    if (list.isEmpty) continue;
+    // состав задач входит в ключ: изменился список — запланированное уведомление пересоздаётся
+    final ids = [for (final t in list) t.id]..sort();
+    final key = '$group#${Reminder(ids.join(','), '', '', '', 0).nid.toRadixString(16)}';
+    final covers = [for (final t in list) one(t)];
+    if (list.length == 1) {
+      out.add(Reminder(key, list.first.id, list.first.title, 'Задача на сегодня', at, isDeadline: true, date: date, group: group, covers: covers));
+    } else {
+      final lines = [for (final t in list.take(12)) '• ${t.title.isEmpty ? 'Без названия' : t.title}', if (list.length > 12) '… и ещё ${list.length - 12}'];
+      out.add(Reminder(key, '', 'Задачи на сегодня: ${list.length}', lines.join('\n'), at, isDeadline: true, date: date, group: group, covers: covers));
     }
   }
   return out;
@@ -72,7 +117,7 @@ ReminderPlan planReminders({
     if (!keys.contains(e.key) && e.value > now) p.cancel.add(_nid(e.key));
   }
   for (final r in reminders) {
-    if (p.fired.containsKey(r.key)) continue;
+    if (p.fired.containsKey(r.key) || (r.group.isNotEmpty && p.fired.containsKey(r.group))) continue;
     if (r.at > now) {
       if (canSchedule) {
         p.scheduled[r.key] = r.at;
@@ -82,6 +127,10 @@ ReminderPlan planReminders({
     }
     // время уже наступило
     p.fired[r.key] = r.at;
+    if (r.group.isNotEmpty) p.fired[r.group] = r.at;
+    for (final k in r.covers) {
+      p.fired[k] = r.at;
+    }
     if (scheduled[r.key] == r.at) continue; // это уведомление показала сама система
     if (r.at < baseline) continue;
     // задача пришла с опозданием: напоминание срабатывает сразу

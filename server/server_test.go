@@ -515,3 +515,34 @@ func TestCloseClearsDeadline(t *testing.T) {
 		t.Errorf("закрыта %v, срок %q, повторение %v", g.Done(), g.S("deadline"), g.F["recurrence"])
 	}
 }
+
+// Пункты планирования ставит и исполнитель; неправильные пункты отбрасываются, закрытие убирает будущие.
+func TestPlans(t *testing.T) {
+	v := newVPS(t)
+	b, c := v.login(uB, ""), v.login(uC, "")
+	now := nowMs()
+	v.push(b, now, []*Ent{ent("task-plan01", uB, false, now-100, map[string]any{"title": "x", "assignee_id": uC})}, nil)
+	today := time.Now().Format("2006-01-02")
+	future := time.Now().Add(72 * time.Hour).Format("2006-01-02")
+	time.Sleep(3 * time.Millisecond)
+	v.push(c, nowMs(), []*Ent{ent("task-plan01", uB, false, nowMs(), map[string]any{"plans": []any{
+		map[string]any{"id": "a1", "date": today, "from": float64(540), "to": float64(600), "notify": true, "before": float64(60)},
+		map[string]any{"id": "a2", "date": future},
+		map[string]any{"id": "a3", "date": "вчера"},
+		map[string]any{"id": "a4", "date": future, "from": float64(600), "to": float64(500)},
+	}})}, nil)
+	g := v.get("task", "task-plan01")
+	items, _ := g.F["plans"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("пункты планирования: %v", g.F["plans"])
+	}
+	if _, has := items[2].(map[string]any)["from"]; has {
+		t.Errorf("пункт с концом раньше начала должен стать пунктом без времени: %v", items[2])
+	}
+	time.Sleep(3 * time.Millisecond)
+	v.push(c, nowMs(), []*Ent{ent("task-plan01", uB, false, nowMs(), map[string]any{"status": "done"})}, nil)
+	g = v.get("task", "task-plan01")
+	if items, _ := g.F["plans"].([]any); len(items) != 1 || items[0].(map[string]any)["id"] != "a1" {
+		t.Errorf("у закрытой задачи остались пункты на следующие дни: %v", g.F["plans"])
+	}
+}

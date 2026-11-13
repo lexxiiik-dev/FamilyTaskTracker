@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"reflect"
 	"sort"
+	"time"
 )
 
 // Actor — от чьего имени применяется правка.
@@ -22,7 +23,7 @@ func (a Actor) allowed(e *Ent, k string) bool {
 	}
 	// исполнитель может закрыть/переоткрыть задачу и добавить её в «Сегодня»
 	if e.Kind == "task" && e.S("assignee_id") == a.UserID {
-		return k == "status" || k == "in_today"
+		return k == "status" || k == "in_today" || k == "plans"
 	}
 	return false
 }
@@ -327,7 +328,22 @@ func (ap *Applier) Finish() error {
 			// она ведёт себя как новая. Делается здесь, потому что исполнитель сам менять срок не вправе.
 			a := e.S("deadline") != "" && ap.force(e, "deadline", "")
 			b := e.F["recurrence"] != nil && ap.force(e, "recurrence", nil)
-			if !a && !b {
+			// пункты планирования на следующие дни у закрытой задачи больше не нужны
+			c := false
+			if items, ok := e.F["plans"].([]any); ok {
+				today := time.Now().In(location(ap.tx)).Format("2006-01-02")
+				keep := []any{}
+				for _, x := range items {
+					if m, ok := x.(map[string]any); ok {
+						if d, _ := m["date"].(string); d > today {
+							continue
+						}
+					}
+					keep = append(keep, x)
+				}
+				c = len(keep) != len(items) && ap.force(e, "plans", keep)
+			}
+			if !a && !b && !c {
 				continue
 			}
 		}

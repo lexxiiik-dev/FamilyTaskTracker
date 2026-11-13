@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,22 +81,23 @@ Future<Repo> seed() async {
   final hers = await r.createList('Вере', other);
   final t1 = await r.addTask(r.draftTask(title: 'Разобрать почту', inToday: true));
   await r.setTaskField(t1, 'is_important', true);
-  final t2 = await r.addTask(r.draftTask(title: 'Оплатить интернет', deadline: '2026-11-08', listId: home.id));
+  final t2 = await r.addTask(r.draftTask(title: 'Оплатить интернет', date: '2026-11-08', listId: home.id));
   await r.setTaskField(t2, 'recurrence', {'type': 'interval', 'n': 1, 'unit': 'month'});
-  final t3 = await r.addTask(r.draftTask(title: 'Подготовить отчёт', deadline: '2026-11-10'));
+  final t3 = await r.addTask(r.draftTask(title: 'Подготовить отчёт'));
+  await r.setPlans(t3, [const PlanItem('rep14', '2026-11-10', from: 14 * 60, to: 15 * 60, notify: true, before: 0)]);
   await r.setTaskField(t3, 'description', 'Собрать цифры за октябрь');
   await r.setTaskField(t3, 'checklist', [
     {'text': 'выгрузка', 'done': true},
     {'text': 'графики', 'done': false}
   ]);
-  await r.setTaskField(t3, 'reminder_at', now + 2 * 3600000);
   await r.addTask(r.draftTask(title: 'Собрать данные', parentId: t3.id));
   final s2 = await r.addTask(r.draftTask(title: 'Свести таблицу', parentId: t3.id));
   await r.setDone(s2, true);
-  await r.addTask(r.draftTask(title: 'Личное: врач', private: true, deadline: '2026-11-12'));
-  await r.addTask(r.draftTask(title: 'Купить корм коту', listId: hers.id, deadline: '2026-11-11'));
+  await r.addTask(r.draftTask(title: 'Личное: врач', private: true, date: '2026-11-12'));
+  await r.addTask(r.draftTask(title: 'Купить корм коту', listId: hers.id, date: '2026-11-11'));
   final d = await r.addTask(r.draftTask(title: 'Полить цветы', inToday: true));
   await r.setDone(d, true);
+  await r.dailyMaintenance(); // просроченная задача переходит на сегодня
   return r;
 }
 
@@ -108,8 +110,10 @@ Future<void> pumpApp(WidgetTester tester, Size size) async {
 }
 
 /// Прокрутить карточку задачи до нужного блока.
-Future<void> reveal(WidgetTester tester, Finder f) =>
-    tester.scrollUntilVisible(f, 120, scrollable: find.descendant(of: find.byType(TaskEditor), matching: find.byType(Scrollable)).first);
+Future<void> reveal(WidgetTester tester, Finder f) async {
+  await tester.scrollUntilVisible(f, 120, scrollable: find.descendant(of: find.byType(TaskEditor), matching: find.byType(Scrollable)).first);
+  await tester.pumpAndSettle(); // прокрутка довыполняется на следующем кадре
+}
 
 Future<void> shot(WidgetTester tester, String name) =>
     expectLater(find.byType(TodoApp), matchesGoldenFile('goldens/$name.png'));
@@ -131,18 +135,19 @@ void main() {
     expect(find.text('Оплатить интернет'), findsOneWidget, reason: 'просроченная задача видна в «Сегодня»');
     expect(find.text('Собрать данные'), findsOneWidget, reason: 'подзадача показана под основной');
     expect(find.text('Купить корм коту'), findsNothing);
-    expect(find.text('Полить цветы'), findsNothing, reason: 'блок «Завершённые» свёрнут');
+    expect(find.text('Полить цветы'), findsOneWidget, reason: 'блок «Завершённые» по умолчанию развёрнут');
     await shot(tester, 'desktop_today');
 
     await tester.tap(find.text('Завершённые'));
     await tester.pumpAndSettle();
-    expect(find.text('Полить цветы'), findsOneWidget);
+    expect(find.text('Полить цветы'), findsNothing);
 
     await tester.tap(find.text('Подготовить отчёт'));
     await tester.pumpAndSettle();
     expect(find.text('Задача'), findsOneWidget);
     expect(find.text('Собрать цифры за октябрь'), findsOneWidget);
-    expect(find.textContaining('Напомнить: Сегодня, 14:00'), findsOneWidget);
+    expect(find.text('Сегодня, 14:00–15:00'), findsOneWidget, reason: 'пункт планирования в карточке');
+    expect(find.text('Добавить в «Сегодня»'), findsNothing, reason: 'на сегодня пункт уже есть');
     expect(find.textContaining('Тэг'), findsNothing, reason: 'тэгов в этой версии нет');
     await shot(tester, 'desktop_task');
 
@@ -161,9 +166,9 @@ void main() {
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
     final t = app.repo.tasks.values.firstWhere((x) => x.title == 'Новая задача');
-    expect(t.inToday, isTrue);
+    expect(app.repo.plannedToday(t), isTrue);
+    expect(t.plans.single.timed, isFalse, reason: 'в «Сегодня» — пункт без времени');
     expect(t.assigneeId, me);
-    expect(t.deadline, '');
     expect(find.text('Новая задача'), findsOneWidget);
 
     await tester.tap(find.text('Вере'));
@@ -178,19 +183,38 @@ void main() {
     await tester.pumpAndSettle();
     final t2 = app.repo.tasks.values.firstWhere((x) => x.title == 'Для Веры');
     expect(t2.assigneeId, other);
-    expect(t2.inToday, isFalse);
+    expect(t2.planned, isFalse);
     await shot(tester, 'desktop_list');
   });
 
-  testWidgets('«Запланировано» сгруппировано по датам; режим «Только свои»; поиск', (tester) async {
+  testWidgets('пункты без времени — пунктиром в начале дня; перетаскивание на шкалу и обратно; «Только свои»; поиск', (tester) async {
     await pumpApp(tester, const Size(1280, 800));
-    await tester.tap(find.text('Запланировано'));
+    expect(find.text('Запланировано'), findsNothing, reason: 'раздел заменён «Планированием»');
+    await tester.tap(find.text('Планирование'));
     await tester.pumpAndSettle();
-    for (final g in ['Просрочено', 'Сегодня', 'Завтра']) {
-      expect(find.text(g), findsOneWidget);
+    // перенесённая на сегодня и сегодняшняя — в сегодняшнем дне, остальные — в своих днях
+    for (final s in ['Оплатить интернет', 'Подготовить отчёт', 'Купить корм коту', 'Личное: врач']) {
+      expect(find.text(s), findsOneWidget, reason: s);
     }
-    expect(find.text('Купить корм коту'), findsOneWidget);
-    await shot(tester, 'desktop_planned');
+    final x0 = tester.getCenter(find.text('вт, 10')).dx, x2 = tester.getCenter(find.text('чт, 12')).dx;
+    expect((tester.getCenter(find.text('Оплатить интернет')).dx - x0).abs(), lessThan(80));
+    expect((tester.getCenter(find.text('Личное: врач')).dx - x2).abs(), lessThan(80));
+    await shot(tester, 'desktop_schedule_due');
+
+    // перетащили на шкалу — пункт получает время в том дне и часе, куда его отпустили (на час)
+    final doctor = app.repo.tasks.values.firstWhere((t) => t.title == 'Личное: врач');
+    var from = tester.getCenter(find.text('Личное: врач'));
+    var to = Offset(tester.getCenter(find.text('пт, 13')).dx, tester.getCenter(find.text('15:00')).dy + 8);
+    await tester.dragFrom(from, to - from, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(doctor.plans.map((p) => '${p.date} ${fmtMin(p.from)}–${fmtMin(p.to)}'), ['2026-11-13 15:00–16:00']);
+
+    // и обратно в зону «без времени» другого дня
+    from = tester.getCenter(find.text('Личное: врач'));
+    to = Offset(tester.getCenter(find.text('ср, 11')).dx, tester.getCenter(find.text('Купить корм коту')).dy);
+    await tester.dragFrom(from, to - from, kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(doctor.plans.map((p) => '${p.date} ${p.timed}'), ['2026-11-11 false']);
 
     await tester.tap(find.text('Только свои'));
     await tester.pumpAndSettle();
@@ -220,7 +244,7 @@ void main() {
     final t = app.repo.tasks.values.firstWhere((x) => x.title == 'Из полной формы');
     expect(t.isPrivate, isTrue);
     expect(t.assigneeId, me);
-    expect(t.inToday, isTrue);
+    expect(app.repo.plannedToday(t), isTrue);
 
     await tester.tap(find.byIcon(Icons.settings_outlined));
     await tester.pumpAndSettle();
@@ -242,7 +266,7 @@ void main() {
     await tester.tap(find.byTooltip('Добавить задачу'));
     await tester.pumpAndSettle();
     final t = app.repo.tasks.values.firstWhere((x) => x.title == 'Через плюсик');
-    expect(t.inToday, isTrue);
+    expect(app.repo.plannedToday(t), isTrue);
     expect(tester.widget<TextField>(find.widgetWithText(TextField, 'Добавить задачу')).controller!.text, '');
     // с пустым полем плюсик ничего не создаёт
     final n = app.repo.tasks.length;
@@ -419,8 +443,7 @@ void main() {
     final n = app.repo.tasks.values.firstWhere((x) => x.title == 'Срочное');
     expect(n.important, isTrue);
     expect(n.listId, '', reason: 'как в разделе «Задачи»');
-    expect(n.inToday, isFalse);
-    expect(n.deadline, '');
+    expect(n.planned, isFalse);
     expect(find.text('Срочное'), findsOneWidget);
     await shot(tester, 'desktop_important');
     // звёздочку сняли — задача ушла из раздела
@@ -438,7 +461,11 @@ void main() {
     await r.setDone(r.tasks.values.firstWhere((t) => t.title == 'Разобрать почту'), true);
     final snap = widgetSnapshot(r);
     final lists = [for (final l in snap['lists'] as List) (l as Map)['name']];
-    expect(lists, ['Сегодняшний день', 'Важные', 'Запланировано', 'Задачи', 'Мои дела', 'Дом', 'Вере'], reason: 'список чужого исполнителя тоже доступен');
+    expect(lists, ['Сегодняшний день', 'Важные', 'Планирование', 'Задачи', 'Мои дела', 'Дом', 'Вере'], reason: 'список чужого исполнителя тоже доступен');
+    // «Планирование» в виджете — только сегодняшний день, по времени; прежний «planned» показывает то же
+    final sched = ((snap['tasks'] as Map)[secSchedule] as List).cast<Map>();
+    expect([for (final x in sched) '${x['title']} | ${x['due']}'], ['Оплатить интернет | без времени', 'Подготовить отчёт | 14:00–15:00', 'Разобрать почту | без времени', 'Полить цветы | без времени'], reason: 'закрытые — в конце');
+    expect((snap['tasks'] as Map)[secPlanned], sched);
     final rows = ((snap['tasks'] as Map)[secTasks] as List).cast<Map>();
     expect([for (final x in rows) x['title']], ['Личное: врач', 'Подготовить отчёт', 'Собрать данные', 'Чужая', 'Разобрать почту', 'Полить цветы']);
     expect([for (final x in rows) x['done']], [false, false, false, false, true, true]);
@@ -496,12 +523,12 @@ void main() {
     // задачу создала Вера и назначила мне: закрыть могу, править — нет
     final r = app.repo;
     final t = Ent('task', 'foreign-1', creatorId: other, createdAt: now);
-    t.f.addAll({'title': 'От Веры', 'assignee_id': me, 'in_today': true});
+    t.f.addAll({'title': 'От Веры', 'assignee_id': me, 'plans': [const PlanItem('f1', '2026-11-10').toJson()]});
     final t2 = Ent('task', 'foreign-2', creatorId: other, createdAt: now);
     t2.f.addAll({
       'title': 'От Веры с пунктами',
       'assignee_id': me,
-      'in_today': true,
+      'plans': [const PlanItem('f2', '2026-11-10').toJson()],
       'checklist': [
         {'text': 'пункт', 'done': false}
       ]
@@ -528,9 +555,17 @@ void main() {
     await pumpApp(tester, const Size(1280, 800));
     List<String> names() => [for (final l in r.visibleLists) l.name];
     expect(names(), ['Дом', 'Вере', 'Работа']);
-    // зажать «Работа» и перетащить на самый верх
-    final g = await tester.startGesture(tester.getCenter(find.text('Работа')));
-    await tester.pump(const Duration(milliseconds: 700));
+    // долгое нажатие на список открывает его настройки
+    final work = r.lists.values.firstWhere((l) => l.name == 'Работа');
+    await tester.longPress(find.text('Работа'));
+    await tester.pumpAndSettle();
+    expect(find.text('Изменить список'), findsOneWidget);
+    expect(find.text('Переместить выше'), findsNothing, reason: 'порядок — только перетаскиванием');
+    await tester.tapAt(const Offset(640, 20));
+    await tester.pumpAndSettle();
+    // перетащить «Работа» за ручку на самый верх
+    final g = await tester.startGesture(tester.getCenter(find.byKey(ValueKey('list-handle:${work.id}'))));
+    await tester.pump(const Duration(milliseconds: 50));
     for (var i = 0; i < 12; i++) {
       await g.moveBy(const Offset(0, -10));
       await tester.pump(const Duration(milliseconds: 20));
@@ -583,6 +618,159 @@ void main() {
     await tester.tap(find.byTooltip('Полная форма').first);
     await tester.pumpAndSettle();
     expect(app.draft!.isPrivate, isTrue);
+  });
+
+  testWidgets('раздел «Планирование»: перенос, длительность, копирование удержанием, новые пункты', (tester) async {
+    final r = app.repo;
+    final report = r.tasks.values.firstWhere((t) => t.title == 'Подготовить отчёт');
+    String plans(Ent t) => [for (final p in t.plans) p.timed ? '${p.date} ${fmtMin(p.from)}–${fmtMin(p.to)}' : '${p.date} -'].join(', ');
+    final haptics = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'HapticFeedback.vibrate') haptics.add('${call.arguments}');
+      return null;
+    });
+    addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+    await pumpApp(tester, const Size(1280, 800));
+    await tester.tap(find.text('Планирование'));
+    await tester.pumpAndSettle();
+    expect(find.text('вт, 10'), findsOneWidget);
+    expect(find.text('Подготовить отчёт'), findsOneWidget, reason: 'пункт со временем — карточкой на шкале');
+    expect(find.text('14:00–15:00'), findsOneWidget);
+    await shot(tester, 'desktop_schedule');
+
+    // карточка двигается мышью: на час позже
+    await tester.drag(find.text('Подготовить отчёт'), const Offset(0, 52), kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(plans(report), '2026-11-10 15:00–16:00');
+    // нижний край меняет длительность
+    await tester.drag(find.byKey(ValueKey('grow:${report.id}:rep14')), const Offset(0, 26), kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(plans(report), '2026-11-10 15:00–16:30');
+    // на следующий день — перенос, а не копия
+    final colW = tester.getCenter(find.text('ср, 11')).dx - tester.getCenter(find.text('вт, 10')).dx;
+    await tester.drag(find.text('Подготовить отчёт'), Offset(colW, 0), kind: PointerDeviceKind.mouse);
+    await tester.pumpAndSettle();
+    expect(plans(report), '2026-11-11 15:00–16:30');
+
+    // зажали на секунду — копирование: вибрация и значок «+» у карточки; исходный пункт остаётся
+    // длинный пункт (4 часа) при перетаскивании виден целиком
+    await r.putPlan(report, report.plans.single.copyWith(to: 19 * 60));
+    await tester.pumpAndSettle();
+    haptics.clear();
+    final g = await tester.startGesture(tester.getCenter(find.text('Подготовить отчёт')), kind: PointerDeviceKind.mouse);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const ValueKey('move-badge')), findsOneWidget, reason: 'режим перетаскивания отмечен значком');
+    expect(tester.getSize(find.ancestor(of: find.byKey(const ValueKey('move-badge')), matching: find.byType(IgnorePointer)).first).height, closeTo(4 * 52, 1));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const ValueKey('copy-badge')), findsOneWidget);
+    expect(haptics, ['HapticFeedbackType.selectionClick', 'HapticFeedbackType.mediumImpact'], reason: 'вибрация при начале перетаскивания и при переходе в копирование');
+    await shot(tester, 'desktop_schedule_copy');
+    for (var i = 0; i < 10; i++) {
+      await g.moveBy(Offset(colW / 10, 52 / 10 * 2));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await g.up();
+    await tester.pumpAndSettle();
+    expect(plans(report), '2026-11-11 15:00–19:00, 2026-11-12 17:00–21:00');
+    expect(report.plans.map((p) => p.notify), [true, true], reason: 'уведомление копируется вместе с пунктом');
+    expect(report.plans[0].id, isNot(report.plans[1].id));
+
+    // «+»: новая задача сразу на шкале
+    await tester.tap(find.byTooltip('Запланировать задачу'));
+    await tester.pumpAndSettle();
+    // задачи по спискам: «Задачи» (без списка), затем списки по порядку меню; раскрыт один список
+    Finder inDialog(String s) => find.descendant(of: find.byType(AlertDialog), matching: find.text(s));
+    expect(inDialog('Подготовить отчёт'), findsOneWidget, reason: 'и у запланированной задачи можно добавить ещё пункт');
+    expect(inDialog('Оплатить интернет'), findsNothing, reason: 'список «Дом» свёрнут');
+    final dy = [for (final s in ['Задачи', 'Дом', 'Вере']) tester.getCenter(inDialog(s)).dy];
+    expect(dy[0] < dy[1] && dy[1] < dy[2], isTrue);
+    // в списке сначала задачи без пунктов, потом с пунктами (каждые — от старых к новым)
+    final names = [for (final e in find.descendant(of: find.byType(AlertDialog), matching: find.byType(ListTile)).evaluate()) ((e.widget as ListTile).title as Text).data];
+    expect(names, ['Собрать данные', 'Разобрать почту', 'Подготовить отчёт', 'Личное: врач']);
+    await tester.ensureVisible(inDialog('Дом'));
+    await tester.pumpAndSettle();
+    await tester.tap(inDialog('Дом'));
+    await tester.pumpAndSettle();
+    expect(inDialog('Оплатить интернет'), findsOneWidget);
+    expect(inDialog('Подготовить отчёт'), findsNothing, reason: 'остальные списки свернулись');
+    await shot(tester, 'desktop_schedule_add');
+    await tester.enterText(find.byKey(const ValueKey('slot-title')), 'Созвон');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Создать'));
+    await tester.pumpAndSettle();
+    final call = r.tasks.values.firstWhere((t) => t.title == 'Созвон');
+    expect(plans(call), '2026-11-10 13:00–14:00', reason: 'по умолчанию — ближайший целый час');
+
+    // существующей задаче добавляется ещё один пункт
+    final pay = r.tasks.values.firstWhere((t) => t.title == 'Оплатить интернет');
+    final n = pay.plans.length;
+    await tester.tap(find.byTooltip('Запланировать задачу'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.descendant(of: find.byType(AlertDialog), matching: find.widgetWithText(TextField, 'Поиск')), 'интернет');
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(AlertDialog), matching: find.text('Оплатить интернет')));
+    await tester.pumpAndSettle();
+    expect(pay.plans.length, n + 1);
+
+    // нажатие на карточку открывает задачу; её пункт виден в карточке задачи
+    await tester.tap(find.text('Созвон'));
+    await tester.pumpAndSettle();
+    expect(find.text('Сегодня, 13:00–14:00'), findsOneWidget);
+  });
+
+  testWidgets('пункты планирования в карточке задачи: несколько, с уведомлением, без времени', (tester) async {
+    await pumpApp(tester, const Size(1280, 800));
+    await tester.tap(find.text('Разобрать почту'));
+    await tester.pumpAndSettle();
+    final t = app.repo.tasks.values.firstWhere((x) => x.title == 'Разобрать почту');
+    expect(find.text('Сегодня, без времени'), findsOneWidget);
+    await reveal(tester, find.byKey(const ValueKey('plan-add')));
+    await tester.tap(find.byKey(const ValueKey('plan-add')));
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(find.byKey(const ValueKey('plan-date'))).dy, lessThan(tester.getCenter(find.byKey(const ValueKey('plan-from'))).dy), reason: 'день — первой строкой, время — второй');
+    await tester.tap(find.byKey(const ValueKey('plan-notify')));
+    await tester.pumpAndSettle();
+    expect(find.text('За 1 ч'), findsOneWidget, reason: 'по умолчанию — за час');
+    await shot(tester, 'desktop_plan_dialog');
+    await tester.tap(find.byKey(const ValueKey('plan-ok')));
+    await tester.pumpAndSettle();
+    expect([for (final p in t.plans) '${p.date} ${p.timed ? fmtMin(p.from) : '-'} ${p.notify} ${p.before}'], ['2026-11-10 - false 60', '2026-11-10 13:00 true 60']);
+    expect(find.text('Сегодня, 13:00–14:00'), findsOneWidget);
+
+    // пункт без времени с уведомлением: время уведомления — стандартное
+    await tester.tap(find.byKey(const ValueKey('plan-add')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('plan-untime')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('plan-notify')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('plan-before')), findsNothing);
+    expect(find.textContaining('В 09:00'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('plan-date')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('14'));
+    await tester.tap(find.descendant(of: find.byType(DatePickerDialog), matching: find.byType(TextButton)).last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('plan-ok')));
+    await tester.pumpAndSettle();
+    expect(t.plans.last.date, '2026-11-14');
+    expect(t.plans.last.timed, isFalse);
+    await shot(tester, 'desktop_plan_items');
+
+    // удаление пункта из окна
+    await tester.tap(find.text('Сегодня, без времени'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Удалить'));
+    await tester.pumpAndSettle();
+    expect(t.plans, hasLength(2));
+    expect(find.text('Добавить в «Сегодня»'), findsNothing, reason: 'на сегодня есть пункт со временем');
+    // убрали и его — появилась кнопка «Добавить в „Сегодня“»
+    await tester.tap(find.byTooltip('Убрать пункт').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Добавить в «Сегодня»'), findsOneWidget);
+    await tester.tap(find.text('Добавить в «Сегодня»'));
+    await tester.pumpAndSettle();
+    expect(app.repo.plannedToday(t), isTrue);
   });
 
   testWidgets('телефон: колонки открываются по очереди', (tester) async {

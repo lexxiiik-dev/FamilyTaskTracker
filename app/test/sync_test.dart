@@ -101,7 +101,7 @@ void main() {
 
   test('регулярная задача, закрытая на двух устройствах офлайн, даёт один следующий экземпляр', () async {
     final d1 = await Device.login(s, uB), d2 = await Device.login(s, uB);
-    final t = await d1.repo.addTask(d1.repo.draftTask(title: 'зарядка', deadline: d1.repo.today));
+    final t = await d1.repo.addTask(d1.repo.draftTask(title: 'зарядка', date: d1.repo.today));
     await d1.repo.setTaskField(t, 'recurrence', {'type': 'daily'});
     await d1.ok();
     await d2.ok();
@@ -113,7 +113,7 @@ void main() {
     for (final d in [d1, d2]) {
       final all = d.repo.tasks.values.where((x) => x.title == 'зарядка').toList();
       expect(all, hasLength(2), reason: 'исходная и один следующий экземпляр');
-      expect(all.where((x) => !x.done).single.deadline, addDays(d.repo.today, 1));
+      expect(all.where((x) => !x.done).single.plans.single.date, addDays(d.repo.today, 1));
     }
   });
 
@@ -214,7 +214,11 @@ void main() {
     await c.repo.setKv('notify_from', '${c.repo.clock() - 3600000}'); // устройство вошло час назад и было офлайн
     final t = await b.repo.addTask(b.repo.draftTask(title: 'позвонить'));
     await b.repo.setTaskField(t, 'assignee_id', uC);
-    await b.repo.setTaskField(t, 'reminder_at', b.repo.clock() - 10 * 60000); // время напоминания уже прошло
+    // время уведомления уже прошло: пункт начался 10 минут назад, уведомление в момент начала
+    final at = b.repo.clock() - 10 * 60000;
+    final lt = b.repo.localOf(at);
+    final from = lt.hour * 60 + lt.minute;
+    await b.repo.setPlans(t, [PlanItem('p1', b.repo.dateOfMoment(at), from: from, to: from + 1, notify: true, before: 0)]);
     await b.ok();
     expect((await processReminders(b.repo, canSchedule: true)).showNow, isEmpty, reason: 'уведомления только исполнителю');
     await c.ok();

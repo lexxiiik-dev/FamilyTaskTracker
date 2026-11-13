@@ -451,7 +451,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                         ),
                       ],
 
-                      title('Напоминания по дедлайнам'),
+                      title('Уведомления'),
                       Plate(
                         onTap: () async {
                           final t = await pickTime(context, repo.deadlineTime);
@@ -462,7 +462,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             const Icon(Icons.schedule, size: 20),
                             const SizedBox(width: 12),
                             Expanded(
-                              child: Text(isWebTransport ? 'Время уведомления в день дедлайна (на ПК и телефоне)' : 'Время уведомления в день дедлайна'),
+                              child: Text(isWebTransport ? 'Стандартное время уведомлений по сегодняшним задачам (на ПК и телефоне)' : 'Стандартное время уведомлений по сегодняшним задачам'),
                             ),
                             Text(repo.deadlineTime, style: const TextStyle(fontWeight: FontWeight.w600)),
                           ],
@@ -481,7 +481,7 @@ class _SettingsDialogState extends State<SettingsDialog> {
                             options: [
                               const Option(secToday, 'Сегодняшний день', leading: Icon(Icons.wb_sunny_outlined, size: 20)),
                               const Option(secImportant, 'Важные', leading: Icon(Icons.star_border, size: 20)),
-                              const Option(secPlanned, 'Запланировано', leading: Icon(Icons.calendar_month_outlined, size: 20)),
+                              const Option(secSchedule, 'Планирование', leading: Icon(Icons.date_range_outlined, size: 20)),
                               const Option(secTasks, 'Задачи', leading: Icon(Icons.home_outlined, size: 20)),
                               const Option(secPrivate, 'Мои дела', leading: Icon(Icons.lock_outline, size: 20)),
                               for (final l in repo.visibleLists)

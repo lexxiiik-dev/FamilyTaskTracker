@@ -1,12 +1,18 @@
 // Главный экран: три колонки, как в Microsoft To Do; на телефоне колонки открываются по очереди.
 import 'package:flutter/material.dart';
 
+import '../core/repo.dart';
 import '../core/sync.dart';
 import 'common.dart';
 import 'login.dart';
+import 'schedule.dart';
 import 'sidebar.dart';
 import 'task_editor.dart';
 import 'task_list.dart';
+
+/// Центральная колонка: шкала «Планирования» или список задач раздела.
+Widget _center({VoidCallback? onMenu}) =>
+    app.section == secSchedule && app.query.trim().isEmpty ? SchedulePane(onMenu: onMenu) : TaskListPane(onMenu: onMenu);
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -58,7 +64,7 @@ class _Wide extends StatelessWidget {
           children: [
             const SizedBox(width: 290, child: Sidebar()),
             VerticalDivider(width: 1, color: borderOf(context)),
-            const Expanded(child: TaskListPane()),
+            Expanded(child: _center()),
             if (detail != null) ...[VerticalDivider(width: 1, color: borderOf(context)), SizedBox(width: 380, child: detail)],
           ],
         ),
@@ -81,7 +87,7 @@ class _Medium extends StatelessWidget {
           children: [
             const SizedBox(width: 270, child: Sidebar()),
             VerticalDivider(width: 1, color: borderOf(context)),
-            Expanded(child: detail ?? const TaskListPane()),
+            Expanded(child: detail ?? _center()),
           ],
         ),
       ),
@@ -110,7 +116,7 @@ class _NarrowState extends State<_Narrow> {
     } else if (showMenu) {
       body = Sidebar(onNavigate: () => setState(() => showMenu = false));
     } else {
-      body = TaskListPane(onMenu: () => setState(() => showMenu = true));
+      body = _center(onMenu: () => setState(() => showMenu = true));
     }
     return PopScope(
       canPop: detail == null && showMenu,

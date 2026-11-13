@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app.dart';
@@ -12,6 +14,8 @@ import 'ui/home.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // в браузере правая кнопка открывает меню приложения (списки, поля ввода), а не меню браузера
+  if (kIsWeb) await BrowserContextMenu.disableContextMenu();
   await initTimeZones();
   final platform = createPlatform();
   if (!await platform.preflight(args)) return; // уже запущен другой экземпляр

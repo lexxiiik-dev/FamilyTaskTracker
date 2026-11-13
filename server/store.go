@@ -42,9 +42,13 @@ var taskFields = map[string]byte{
 	"title": 's', "description": 's', "checklist": 'j', "parent_id": 's', "list_id": 's',
 	"assignee_id": 's', "deadline": 's', "reminder_at": 'n', "status": 's',
 	"is_important": 'b', "in_today": 'b', "recurrence": 'j', "sort_order": 'n', "deleted": 'b',
+	// пункты планирования: [{id, date, from, to, notify, before}], from/to — минуты от начала дня (без них — пункт без времени).
+	// deadline, reminder_at и in_today — поля прежних версий клиента: новые клиенты переводят их в пункты.
+	"plans": 'j',
 }
 var listFields = map[string]byte{
 	"name": 's', "assignee_id": 's', "sort_order": 'n', "deleted": 'b', "delete_tasks": 'b',
+	"color": 's', // цвет списка (#RRGGBB)
 }
 
 func fieldsOf(kind string) map[string]byte {
@@ -71,10 +75,54 @@ func defaultVal(k string, typ byte) any {
 	case 'n':
 		return float64(0)
 	}
-	if k == "checklist" {
+	if k == "checklist" || k == "plans" {
 		return []any{}
 	}
 	return nil
+}
+
+// cleanPlans оставляет только пункты планирования с правильной датой и временем.
+func cleanPlans(v any) (any, bool) {
+	if v == nil {
+		return []any{}, true
+	}
+	a, ok := v.([]any)
+	if !ok || len(a) > 300 {
+		return nil, false
+	}
+	out := []any{}
+	for _, x := range a {
+		m, ok := x.(map[string]any)
+		if !ok {
+			continue
+		}
+		d, _ := m["date"].(string)
+		id, _ := m["id"].(string)
+		if !dateRe.MatchString(d) || id == "" || len(id) > 64 {
+			continue
+		}
+		if f, has := m["from"]; has {
+			from, ok1 := f.(float64)
+			to, ok2 := m["to"].(float64)
+			if !ok1 || !ok2 || from < 0 || to <= from || to > 1440 {
+				delete(m, "from")
+				delete(m, "to")
+			}
+		}
+		out = append(out, m)
+	}
+	return out, true
+}
+
+// location — часовой пояс из общих настроек (не задан — пояс сервера).
+func location(tx *sql.Tx) *time.Location {
+	z, _ := globalGet(tx)["tz"].V.(string)
+	if z != "" {
+		if loc, err := time.LoadLocation(z); err == nil {
+			return loc
+		}
+	}
+	return time.Local
 }
 
 // Проверка и приведение значения поля; ok=false — значение отбрасывается.
@@ -108,6 +156,9 @@ func cleanVal(k string, typ byte, v any) (any, bool) {
 	case 'n':
 		n, ok := v.(float64)
 		return n, ok
+	}
+	if k == "plans" {
+		return cleanPlans(v)
 	}
 	if k == "checklist" {
 		if v == nil {

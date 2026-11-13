@@ -55,20 +55,32 @@
                 android:src="@drawable/widget_add" />
         </LinearLayout>
 
-        <ListView
-            android:id="@+id/widget_list"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:divider="@null"
-            android:dividerHeight="0dp" />
+            android:layout_height="match_parent">
 
-        <TextView
-            android:id="@+id/widget_empty"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:gravity="center"
-            android:text="Задач нет"
-            android:textColor="@color/widget_muted"
-            android:textSize="13sp" />
+            <!-- свободное место под списком: нажатие открывает раздел в приложении -->
+            <FrameLayout
+                android:id="@+id/widget_rest"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- список занимает только высоту своих строк, остальное достаётся widget_rest -->
+            <ListView
+                android:id="@+id/widget_list"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:divider="@null"
+                android:dividerHeight="0dp" />
+
+            <TextView
+                android:id="@+id/widget_empty"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:text="Задач нет"
+                android:textColor="@color/widget_muted"
+                android:textSize="13sp" />
+        </FrameLayout>
     </LinearLayout>
 </FrameLayout>
