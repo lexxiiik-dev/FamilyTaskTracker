@@ -93,14 +93,14 @@ class Repo extends ChangeNotifier {
   /// Настройка только этого устройства, от которой зависит внешний вид (например, фоновая картинка).
   /// [persist] = false — только показать (пока ползунок двигается), без записи на диск.
   Future<void> setLocal(String k, String? v, {bool persist = true}) async {
-    if (persist) {
-      await setKv(k, v);
-    } else if (v == null) {
+    // сначала показать, потом записать на диск
+    if (v == null) {
       kv.remove(k);
     } else {
       kv[k] = v;
     }
     notifyListeners();
+    if (persist) await st.putKv(k, v);
   }
 
   // ---- пользователи ----

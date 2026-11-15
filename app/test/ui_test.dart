@@ -802,6 +802,28 @@ void main() {
     await shot(tester, 'phone_login');
   });
 
+  testWidgets('масштаб интерфейса: хранится на устройстве и уменьшает всё', (tester) async {
+    await app.repo.setKv('user_id', null);
+    await app.repo.setKv('server_url', null);
+    await app.repo.setKv('access_key', null);
+    await pumpApp(tester, const Size(390, 800));
+    double width(String t) => tester.getBottomRight(find.text(t)).dx - tester.getTopLeft(find.text(t)).dx; // на экране, с учётом масштаба
+    final before = width('Ключ доступа');
+    await tester.tap(find.byTooltip('Мельче'));
+    await tester.pumpAndSettle();
+    expect(app.repo.kv['ui_scale'], '95');
+    await tester.tap(find.byTooltip('Мельче'));
+    await tester.pumpAndSettle();
+    expect(app.repo.kv['ui_scale'], '90');
+    expect(app.repo.settingsDirty.contains('ui_scale'), isFalse); // на сервер не уходит
+    expect(width('Ключ доступа'), closeTo(before * 0.9, 1));
+    await shot(tester, 'phone_login_90');
+    // нажатия в масштабе попадают куда надо: сброс к 100 %
+    await tester.tap(find.text('90 %'));
+    await tester.pumpAndSettle();
+    expect(app.repo.kv['ui_scale'], isNull);
+  });
+
   testWidgets('локальный режим: без сервера, без совместных функций; подключение к серверу из настроек', (tester) async {
     await app.repo.resetForUser('', '');
     await app.repo.setKv('user_id', null);

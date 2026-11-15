@@ -300,6 +300,24 @@ class _SettingsDialogState extends State<SettingsDialog> {
                       ),
                       const SizedBox(height: 12),
                       Plate(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('Размер интерфейса'),
+                                  Text('Элементы и шрифт; только на этом устройстве', style: TextStyle(fontSize: 12, color: muted)),
+                                ],
+                              ),
+                            ),
+                            const UiScaleControl(),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Plate(
                         padding: EdgeInsets.zero,
                         child: Column(
                           children: [

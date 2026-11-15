@@ -49,6 +49,75 @@ Uint8List? backgroundBytes(Repo r) {
 /// Насколько фоновая картинка закрашена цветом темы, 0..1.
 double backgroundDim(Repo r) => ((int.tryParse(r.kv['bg_dim'] ?? '') ?? 50).clamp(0, 90)) / 100;
 
+/// Масштаб интерфейса в процентах: хранится только на устройстве (на сервер не уходит).
+const uiScaleSteps = [70, 75, 80, 85, 90, 95, 100, 110, 120, 130, 140];
+int uiScalePercent(Repo r) {
+  final v = int.tryParse(r.kv['ui_scale'] ?? '') ?? 100;
+  return uiScaleSteps.contains(v) ? v : 100;
+}
+
+/// Масштабирует всё под ним (элементы и шрифт): раскладка идёт по экрану, уменьшенному/увеличенному в [scale] раз,
+/// и результат растягивается на настоящий размер. Нажатия и координаты пересчитываются самим Flutter.
+class ScaledUi extends StatelessWidget {
+  final double scale;
+  final Widget child;
+  const ScaledUi({super.key, required this.scale, required this.child});
+  @override
+  Widget build(BuildContext context) {
+    // структура дерева одна и та же при любом масштабе, иначе смена масштаба пересоздала бы всё приложение
+    final mq = MediaQuery.of(context);
+    final size = mq.size / scale;
+    return MediaQuery(
+      data: mq.copyWith(
+        size: size,
+        devicePixelRatio: mq.devicePixelRatio * scale,
+        padding: mq.padding / scale,
+        viewPadding: mq.viewPadding / scale,
+        viewInsets: mq.viewInsets / scale,
+        systemGestureInsets: mq.systemGestureInsets / scale,
+      ),
+      child: FittedBox(
+        fit: BoxFit.fill,
+        alignment: Alignment.topLeft,
+        child: SizedBox(width: size.width, height: size.height, child: child),
+      ),
+    );
+  }
+}
+
+/// «− 90 % +»: выбор масштаба интерфейса (настройки и экран входа).
+class UiScaleControl extends StatelessWidget {
+  const UiScaleControl({super.key});
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(listenable: app.repo, builder: (context, _) => _build(context));
+
+  Widget _build(BuildContext context) {
+    final r = app.repo;
+    final cur = uiScalePercent(r);
+    final i = uiScaleSteps.indexOf(cur);
+    void set(int v) => r.setLocal('ui_scale', v == 100 ? null : '$v');
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(icon: const Icon(Icons.remove), tooltip: 'Мельче', onPressed: i > 0 ? () => set(uiScaleSteps[i - 1]) : null),
+        SizedBox(
+          width: 64,
+          child: TextButton(
+            onPressed: cur == 100 ? null : () => set(100),
+            style: TextButton.styleFrom(disabledForegroundColor: Theme.of(context).colorScheme.onSurface),
+            child: Text('$cur %', style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.add),
+          tooltip: 'Крупнее',
+          onPressed: i < uiScaleSteps.length - 1 ? () => set(uiScaleSteps[i + 1]) : null,
+        ),
+      ],
+    );
+  }
+}
+
 /// Оформление: акцентный цвет, цвет подложек и окантовок, светлая или тёмная тема.
 ThemeData buildTheme(Repo r, Brightness system) {
   final mode = r.setting<String>('theme', 'system');
@@ -124,7 +193,8 @@ class Live extends StatelessWidget {
   final WidgetBuilder builder;
   const Live({super.key, required this.builder});
   @override
-  Widget build(BuildContext context) => ListenableBuilder(listenable: Listenable.merge([app, app.repo, app.sync]), builder: (c, _) => builder(c));
+  Widget build(BuildContext context) =>
+      ListenableBuilder(listenable: Listenable.merge([app, app.repo, app.sync]), builder: (c, _) => builder(c));
 }
 
 /// Плашка с окантовкой — основной «строительный блок» оформления.

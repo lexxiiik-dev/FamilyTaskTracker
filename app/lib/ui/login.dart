@@ -262,6 +262,16 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: TextStyle(color: Theme.of(context).colorScheme.error),
                       ),
                     ),
+                  const SizedBox(height: 18),
+                  // на некоторых телефонах интерфейс крупный и не помещается — масштаб можно выбрать ещё до входа
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('Размер интерфейса', style: TextStyle(color: muted)),
+                      const SizedBox(width: 4),
+                      const UiScaleControl(),
+                    ],
+                  ),
                 ],
               ),
             ),

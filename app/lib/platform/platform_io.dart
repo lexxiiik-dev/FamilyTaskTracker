@@ -99,7 +99,8 @@ class WindowsPlatform with TrayListener, WindowListener implements PlatformHooks
         await s.flush();
         await s.close();
       } catch (_) {}
-      return false;
+      // выход из main процесс не завершает: движок Flutter остаётся жить без окна, поэтому завершаем явно
+      exit(0);
     }
     await windowManager.ensureInitialized();
     return true;

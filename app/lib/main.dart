@@ -40,29 +40,34 @@ class TodoApp extends StatelessWidget {
           // в браузере на телефоне в этот цвет красится адресная строка
           color: parseHex(app.repo.setting<String>('accent', ''), defaultAccent),
           debugShowCheckedModeBanner: false,
-          builder: (context, child) {
-            final bar = app.platform.titleBar();
-            final bg = backgroundBytes(app.repo);
-            final body = bar == null
-                ? child!
-                : Column(
-                    children: [
-                      bar,
-                      Expanded(child: child!),
-                    ],
-                  );
-            final base = Theme.of(context).scaffoldBackgroundColor;
-            if (bg == null) return bar == null ? body : ColoredBox(color: base, child: body);
-            // фоновая картинка лежит под всем окном и приглушается цветом темы
-            return Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.memory(bg, fit: BoxFit.cover, gaplessPlayback: true, filterQuality: FilterQuality.medium),
-                ColoredBox(color: base.withValues(alpha: backgroundDim(app.repo))),
-                body,
-              ],
-            );
-          },
+          builder: (context, child) => ScaledUi(
+            scale: uiScalePercent(app.repo) / 100,
+            child: Builder(
+              builder: (context) {
+                final bar = app.platform.titleBar();
+                final bg = backgroundBytes(app.repo);
+                final body = bar == null
+                    ? child!
+                    : Column(
+                        children: [
+                          bar,
+                          Expanded(child: child!),
+                        ],
+                      );
+                final base = Theme.of(context).scaffoldBackgroundColor;
+                if (bg == null) return bar == null ? body : ColoredBox(color: base, child: body);
+                // фоновая картинка лежит под всем окном и приглушается цветом темы
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.memory(bg, fit: BoxFit.cover, gaplessPlayback: true, filterQuality: FilterQuality.medium),
+                    ColoredBox(color: base.withValues(alpha: backgroundDim(app.repo))),
+                    body,
+                  ],
+                );
+              },
+            ),
+          ),
           theme: buildTheme(app.repo, Brightness.light),
           darkTheme: buildTheme(app.repo, Brightness.dark),
           themeMode: mode == 'dark' ? ThemeMode.dark : (mode == 'light' ? ThemeMode.light : ThemeMode.system),
